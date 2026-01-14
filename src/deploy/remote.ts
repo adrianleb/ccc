@@ -3,11 +3,13 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, mkdtempSync } from 
 import { join } from "path";
 import { tmpdir } from "os";
 import type { Agent } from "../agents/types.ts";
+import { loadAgents } from "../agents/loader.ts";
+import { checkAgentInstalled } from "../agents/auth.ts";
 import { generateDockerfile } from "../templates/dockerfile.ts";
 import { generateCompose } from "../templates/compose.ts";
 import { generateEntrypoint } from "../templates/entrypoint.ts";
 import { generateFirewall } from "../templates/firewall.ts";
-import { generateCccServer } from "../templates/ccc-server.ts";
+import { detectRemotePlatform, ensureBinaryForPlatform } from "./binary.ts";
 import * as ui from "../utils/ui.ts";
 
 export const childProcess = { execSync, spawn, spawnSync };
@@ -120,9 +122,15 @@ export async function initRemote(
   writeFileSync(join(tempDir, "init-firewall.sh"), firewall);
   ui.item("init-firewall.sh", "ok");
 
-  const cccServer = generateCccServer({ agent: agents[0]! });
-  writeFileSync(join(tempDir, "ccc-server"), cccServer);
-  ui.item("ccc-server", "ok");
+  // Detect remote platform and get appropriate binary
+  ui.item("Detecting remote platform...", "pending");
+  const remotePlatform = detectRemotePlatform(host);
+  if (!remotePlatform) {
+    throw new Error("Could not detect remote platform");
+  }
+  ui.item(`Remote platform: ${remotePlatform.os}-${remotePlatform.arch}`, "ok");
+
+  const binaryPath = await ensureBinaryForPlatform(remotePlatform);
 
   const sshKeysDir = join(tempDir, "ssh-keys");
   mkdirSync(sshKeysDir, { recursive: true });
@@ -151,9 +159,9 @@ export async function initRemote(
   scpDir(sshKeysDir, host, `${REMOTE_CCC_DIR}/`);
   ui.item("Copied SSH keys", "ok");
 
-  scpFile(join(tempDir, "ccc-server"), host, `${REMOTE_BIN_DIR}/ccc-server`);
-  sshExec(host, `chmod +x ${REMOTE_BIN_DIR}/ccc-server`);
-  ui.item("Installed ccc-server", "ok");
+  scpFile(binaryPath, host, `${REMOTE_BIN_DIR}/ccc`);
+  sshExec(host, `chmod +x ${REMOTE_BIN_DIR}/ccc`);
+  ui.item("Installed ccc binary", "ok");
 
   sshExec(host, `chmod +x ${REMOTE_CCC_DIR}/entrypoint.sh ${REMOTE_CCC_DIR}/init-firewall.sh`);
 
@@ -182,12 +190,13 @@ export async function initRemote(
   console.log(`  ${ui.style.dim("2.")} Build the container on remote`);
   console.log(`  ${ui.style.dim("3.")} Connect: ${ui.style.command(`ccc @remote`)}`);
 
-  ui.hint(`You can also SSH directly: ${ui.style.command(`ssh ${host}`)}, then run ${ui.style.command("ccc-server")}`);
+  ui.hint(`You can also SSH directly: ${ui.style.command(`ssh ${host}`)}, then run ${ui.style.command("ccc")}`);
 }
 
-export async function buildRemote(host: string): Promise<void> {
+export async function buildRemote(host: string, options: { noCache?: boolean } = {}): Promise<void> {
   return new Promise((resolve, reject) => {
-    const result = childProcess.spawn("ssh", [host, `cd ${REMOTE_CCC_DIR} && docker compose build`], {
+    const buildCmd = options.noCache ? "docker compose build --no-cache" : "docker compose build";
+    const result = childProcess.spawn("ssh", [host, `cd ${REMOTE_CCC_DIR} && ${buildCmd}`], {
       stdio: "inherit",
     });
 
@@ -225,13 +234,19 @@ export function attachRemote(
 ): void {
   const args = ["ssh", "-t", host];
 
-  if (options.yolo && options.prompt) {
-    args.push(`${REMOTE_BIN_DIR}/ccc-server --yolo "${options.prompt}"`);
-  } else if (options.noFirewall) {
-    args.push(`${REMOTE_BIN_DIR}/ccc-server --no-firewall ${sessionName}`);
-  } else {
-    args.push(`${REMOTE_BIN_DIR}/ccc-server ${sessionName}`);
+  // Build the ccc command with appropriate flags
+  const cccArgs = [sessionName];
+  if (options.noFirewall) {
+    cccArgs.push("--no-firewall");
   }
+  if (options.yolo) {
+    cccArgs.push("--yolo");
+    if (options.prompt) {
+      cccArgs.push(`"${options.prompt}"`);
+    }
+  }
+
+  args.push(`${REMOTE_BIN_DIR}/ccc ${cccArgs.join(" ")}`);
 
   const result = childProcess.spawnSync(args[0]!, args.slice(1), {
     stdio: "inherit",
@@ -264,4 +279,88 @@ export function showRemoteLogs(host: string): void {
 export function restartRemote(host: string): void {
   sshExec(host, "docker restart ccc", { stdio: "inherit" });
   ui.success("Remote container restarted!");
+}
+
+export async function updateRemoteBinary(host: string): Promise<void> {
+  ui.item("Detecting remote platform...", "pending");
+  const remotePlatform = detectRemotePlatform(host);
+  if (!remotePlatform) {
+    throw new Error("Could not detect remote platform");
+  }
+  ui.item(`Remote platform: ${remotePlatform.os}-${remotePlatform.arch}`, "ok");
+
+  // Force re-download by getting the binary (will use cache or download)
+  const binaryPath = await ensureBinaryForPlatform(remotePlatform);
+
+  // Copy to remote
+  sshExec(host, `mkdir -p ${REMOTE_BIN_DIR}`, { ignoreError: true });
+  scpFile(binaryPath, host, `${REMOTE_BIN_DIR}/ccc`);
+  sshExec(host, `chmod +x ${REMOTE_BIN_DIR}/ccc`);
+  ui.item("Updated ccc binary on remote", "ok");
+}
+
+export interface RemoteHostStatus {
+  reachable: boolean;
+  containerExists: boolean;
+  containerRunning: boolean;
+  takopi: boolean;
+  sessions: string[];
+  agents: string[];
+}
+
+export function getRemoteHostStatus(host: string): RemoteHostStatus {
+  const status: RemoteHostStatus = {
+    reachable: false,
+    containerExists: false,
+    containerRunning: false,
+    takopi: false,
+    sessions: [],
+    agents: [],
+  };
+
+  // Test SSH connection
+  if (!testSSHConnection(host)) {
+    return status;
+  }
+  status.reachable = true;
+
+  // Check container status
+  try {
+    const result = sshExec(host, "docker inspect -f '{{.State.Running}}' ccc 2>/dev/null");
+    status.containerExists = true;
+    status.containerRunning = result.trim() === "true";
+  } catch {
+    return status;
+  }
+
+  if (status.containerRunning) {
+    // Check takopi
+    try {
+      sshExec(host, "docker exec ccc pgrep -f takopi >/dev/null 2>&1");
+      status.takopi = true;
+    } catch {
+      status.takopi = false;
+    }
+
+    // Get sessions
+    try {
+      const sessionsOutput = sshExec(host, "docker exec ccc shpool list 2>/dev/null");
+      const lines = sessionsOutput.trim().split("\n").filter(Boolean);
+      // Parse shpool list output - skip header line
+      status.sessions = lines.slice(1).map((line) => line.split(/\s+/)[0]).filter(Boolean) as string[];
+    } catch {
+      status.sessions = [];
+    }
+
+    // Check installed agents
+    const enabledAgents = loadAgents();
+    for (const [name, agent] of Object.entries(enabledAgents)) {
+      const installStatus = checkAgentInstalled(agent, { host });
+      if (installStatus.installed) {
+        status.agents.push(name);
+      }
+    }
+  }
+
+  return status;
 }

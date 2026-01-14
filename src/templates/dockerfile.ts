@@ -7,11 +7,10 @@ export interface DockerfileOptions {
 }
 
 export function generateDockerfile(options: DockerfileOptions): string {
-  const { agents, timezone = "UTC", gitDeltaVersion = "0.18.2" } = options;
+  const { timezone = "UTC", gitDeltaVersion = "0.18.2" } = options;
 
-  const agentSnippets = agents
-    .map((agent) => agent.getDockerfileSnippet())
-    .join("\n\n");
+  // Note: Agent installation moved to entrypoint for volume persistence
+  // Agents are installed on first container start, not at build time
 
   return `FROM oven/bun:1-debian
 
@@ -70,7 +69,7 @@ RUN --mount=type=cache,target=/home/ccc/.cargo/registry,uid=1000,gid=1000 \\
     . "$HOME/.cargo/env" && \\
     CARGO_TARGET_DIR=/tmp/cargo-target cargo install shpool
 
-${agentSnippets}
+# Note: Agents are installed at runtime by entrypoint.sh (for volume persistence)
 
 # Install oh-my-zsh with plugins
 RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended && \\
@@ -80,7 +79,7 @@ RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master
 # Configure zsh
 RUN sed -i 's/plugins=(git)/plugins=(git fzf zsh-autosuggestions zsh-syntax-highlighting)/' ~/.zshrc && \\
     echo 'export HISTFILE=/commandhistory/.zsh_history' >> ~/.zshrc && \\
-    echo 'export PATH="/home/ccc/.local/bin:/home/ccc/.cargo/bin:$PATH"' >> ~/.zshrc
+    echo 'export PATH="/home/ccc/.npm-global/bin:/home/ccc/.opencode/bin:/home/ccc/.local/bin:/home/ccc/.cargo/bin:$PATH"' >> ~/.zshrc
 
 # Configure shpool
 RUN mkdir -p ~/.config/shpool && \\

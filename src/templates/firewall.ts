@@ -1,17 +1,34 @@
 import type { Agent } from "../agents/types.ts";
+import type { Extension } from "../extensions/types.ts";
 
 export interface FirewallOptions {
   agents: Agent[];
+  extensions?: Extension[];
+  userDomains?: string[];
 }
 
 export function generateFirewall(options: FirewallOptions): string {
-  const { agents } = options;
+  const { agents, extensions = [], userDomains = [] } = options;
 
   const allDomains = new Set<string>();
+
+  // Add agent domains
   for (const agent of agents) {
     for (const domain of agent.firewallDomains) {
       allDomains.add(domain);
     }
+  }
+
+  // Add extension domains
+  for (const extension of extensions) {
+    for (const domain of extension.firewallDomains) {
+      allDomains.add(domain);
+    }
+  }
+
+  // Add user domains
+  for (const domain of userDomains) {
+    allDomains.add(domain);
   }
 
   const domainList = Array.from(allDomains).join("\n");

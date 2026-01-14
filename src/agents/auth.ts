@@ -81,7 +81,8 @@ export function checkAgentInstalled(
 ): { installed: boolean; version?: string } {
   const { containerName = DEFAULT_CONTAINER_NAME, host = null } = options;
 
-  const dockerCmd = `docker exec ${containerName} sh -c '${agent.versionCmd} 2>/dev/null || echo "__NOT_INSTALLED__"'`;
+  // Use bash -c to inherit Docker ENV PATH (npm-global, cargo, etc.)
+  const dockerCmd = `docker exec ${containerName} bash -c '${agent.versionCmd} 2>/dev/null || echo "__NOT_INSTALLED__"'`;
 
   try {
     let result: string;
@@ -118,6 +119,7 @@ export function installAgentInContainer(
 ): boolean {
   const { containerName = DEFAULT_CONTAINER_NAME, host = null } = options;
 
+  // Use bash -c to inherit Docker ENV PATH
   const dockerCmd = `docker exec ${containerName} bash -c '${agent.installCmd}'`;
 
   try {
@@ -144,14 +146,18 @@ export function runAgentAuth(
 ): boolean {
   const { containerName = DEFAULT_CONTAINER_NAME, host = null } = options;
 
+  // Use auth_cmd if specified, otherwise fall back to run_cmd
+  const authCmd = agent.authCmd || agent.runCmd;
+
   try {
     if (host) {
       // Use ssh -t for TTY allocation
-      spawnSync("ssh", ["-t", host, `docker exec -it ${containerName} ${agent.runCmd}`], {
+      spawnSync("ssh", ["-t", host, `docker exec -it ${containerName} ${authCmd}`], {
         stdio: "inherit",
       });
     } else {
-      spawnSync("docker", ["exec", "-it", containerName, ...agent.runCmd.split(" ")], {
+      // Run through bash -ic (interactive, non-login) to get TTY while keeping Docker ENV PATH
+      spawnSync("docker", ["exec", "-it", containerName, "bash", "-ic", authCmd], {
         stdio: "inherit",
       });
     }

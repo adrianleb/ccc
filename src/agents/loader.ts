@@ -13,6 +13,7 @@ function configToAgent(config: AgentConfig): Agent {
     installCmd: config.install_cmd,
     versionCmd: config.version_cmd,
     runCmd: config.run_cmd,
+    authCmd: config.auth?.auth_cmd, // Separate auth command if specified
     firewallDomains: config.firewall?.domains || [],
     skipPermissionsFlag: config.skip_permissions_flag,
     configPath: config.config_path,

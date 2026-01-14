@@ -2,6 +2,9 @@ import { existsSync, mkdirSync, writeFileSync, chmodSync, readFileSync } from "f
 import { join } from "path";
 import { execSync, spawn } from "child_process";
 import type { Agent } from "../agents/types.ts";
+import type { Extension } from "../extensions/types.ts";
+import { loadAgents } from "../agents/loader.ts";
+import { checkAgentInstalled } from "../agents/auth.ts";
 import { generateDockerfile } from "../templates/dockerfile.ts";
 import { generateCompose } from "../templates/compose.ts";
 import { generateEntrypoint } from "../templates/entrypoint.ts";
@@ -18,6 +21,8 @@ export interface InitOptions {
   projectsDir?: string;
   gitUserName?: string;
   gitUserEmail?: string;
+  extensions?: Extension[];
+  userFirewallDomains?: string[];
 }
 
 export function generateFiles(options: InitOptions): void {
@@ -29,6 +34,8 @@ export function generateFiles(options: InitOptions): void {
     projectsDir = "./projects",
     gitUserName,
     gitUserEmail,
+    extensions = [],
+    userFirewallDomains = [],
   } = options;
 
   if (!existsSync(outputDir)) {
@@ -49,7 +56,7 @@ export function generateFiles(options: InitOptions): void {
   chmodSync(entrypointPath, 0o755);
   ui.item("entrypoint.sh", "ok");
 
-  const firewall = generateFirewall({ agents });
+  const firewall = generateFirewall({ agents, extensions, userDomains: userFirewallDomains });
   const firewallPath = join(outputDir, "init-firewall.sh");
   writeFileSync(firewallPath, firewall);
   chmodSync(firewallPath, 0o755);
@@ -216,4 +223,70 @@ export function showLogs(containerName: string): void {
 export function restartContainer(containerName: string): void {
   childProcess.execSync(`docker restart ${containerName}`, { stdio: "inherit" });
   console.log("Container restarted");
+}
+
+export interface ContainerStatus {
+  exists: boolean;
+  running: boolean;
+  takopi: boolean;
+  sessions: string[];
+  agents: string[];
+}
+
+export function getContainerStatus(containerName: string): ContainerStatus {
+  const status: ContainerStatus = {
+    exists: false,
+    running: false,
+    takopi: false,
+    sessions: [],
+    agents: [],
+  };
+
+  try {
+    const result = childProcess.execSync(
+      `docker inspect -f '{{.State.Running}}' ${containerName} 2>/dev/null`,
+      { encoding: "utf-8", stdio: "pipe" }
+    );
+    status.exists = true;
+    status.running = result.trim() === "true";
+  } catch {
+    return status;
+  }
+
+  if (status.running) {
+    // Check takopi
+    try {
+      childProcess.execSync(
+        `docker exec ${containerName} pgrep -f takopi >/dev/null 2>&1`,
+        { stdio: "pipe" }
+      );
+      status.takopi = true;
+    } catch {
+      status.takopi = false;
+    }
+
+    // Get sessions
+    try {
+      const sessionsOutput = childProcess.execSync(
+        `docker exec ${containerName} shpool list 2>/dev/null`,
+        { encoding: "utf-8", stdio: "pipe" }
+      );
+      const lines = sessionsOutput.trim().split("\n").filter(Boolean);
+      // Parse shpool list output - skip header line
+      status.sessions = lines.slice(1).map((line) => line.split(/\s+/)[0]).filter(Boolean) as string[];
+    } catch {
+      status.sessions = [];
+    }
+
+    // Check installed agents
+    const enabledAgents = loadAgents();
+    for (const [name, agent] of Object.entries(enabledAgents)) {
+      const installStatus = checkAgentInstalled(agent, { containerName });
+      if (installStatus.installed) {
+        status.agents.push(name);
+      }
+    }
+  }
+
+  return status;
 }

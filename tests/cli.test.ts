@@ -39,6 +39,9 @@ mock.module("../src/agents/loader.ts", () => ({
   listAvailableAgents: () => [],
   enableAgents: () => [],
   getAgentsDir: () => "/tmp/ccc/agents",
+  disableAgent: () => true,
+  isAgentEnabled: () => true,
+  getAgentConfig: () => undefined,
 }));
 
 mock.module("../src/utils/checks.ts", () => ({
@@ -53,6 +56,7 @@ mock.module("../src/config.ts", () => ({
     default_agent: configState.default_agent,
     remotes: Object.fromEntries(remotes),
   }),
+  ensureConfigDir: () => {},
   addRemote: (name: string, host: string, aliases?: string[]) => {
     remotes.set(name, { host, alias: aliases });
     calls.addRemote.push([name, host, aliases]);
@@ -77,6 +81,22 @@ mock.module("../src/config.ts", () => ({
   },
 }));
 
+mock.module("../src/extensions/loader.ts", () => ({
+  loadExtensions: () => ({}),
+  listAvailableExtensions: () => [],
+  enableExtensions: () => [],
+  disableExtension: () => false,
+  isExtensionEnabled: () => false,
+  getExtensionsDir: () => "/tmp/ccc/extensions",
+}));
+
+mock.module("../src/firewall/config.ts", () => ({
+  getUserFirewallDomains: () => [],
+  addUserFirewallDomain: () => true,
+  removeUserFirewallDomain: () => true,
+  getFirewallConfigPath: () => "/tmp/ccc/firewall.toml",
+}));
+
 mock.module("../src/deploy/local.ts", () => ({
   generateFiles: () => {},
   generateContainerSSHKeys: async () => "",
@@ -95,6 +115,13 @@ mock.module("../src/deploy/local.ts", () => ({
   killSession: () => {},
   showLogs: () => {},
   restartContainer: () => {},
+  getContainerStatus: () => ({
+    exists: true,
+    running: true,
+    takopi: false,
+    sessions: [],
+    agents: [],
+  }),
 }));
 
 mock.module("../src/deploy/remote.ts", () => ({
@@ -111,6 +138,14 @@ mock.module("../src/deploy/remote.ts", () => ({
   showRemoteLogs: () => {},
   restartRemote: () => {},
   sshExec: () => "",
+  getRemoteHostStatus: () => ({
+    reachable: true,
+    containerExists: true,
+    containerRunning: true,
+    takopi: false,
+    sessions: [],
+    agents: [],
+  }),
 }));
 
 const childProcessMock = () => ({
@@ -178,10 +213,11 @@ test("remote target uses attachRemote", async () => {
   expect(calls.attachRemote[0]!.host).toBe("user@host");
 });
 
-test("ls routes to listSessions", async () => {
+test("ls shows hosts and sessions overview", async () => {
   const program = createCLI();
+  // ls now shows all hosts overview, not just local sessions
   await program.parseAsync(["node", "ccc", "ls"]);
-  expect(calls.listSessions).toHaveLength(1);
+  // Should not attach to any session
   expect(calls.attachSession).toHaveLength(0);
 });
 
@@ -228,5 +264,5 @@ test("update runs agent install command in container", async () => {
   const program = createCLI();
   await program.parseAsync(["node", "ccc", "update", "--agent", "codex"]);
   expect(calls.execSync).toHaveLength(1);
-  expect(calls.execSync[0]).toContain('docker exec ccc sh -c "install codex"');
+  expect(calls.execSync[0]).toContain('docker exec ccc bash -c "install codex"');
 });

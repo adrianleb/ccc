@@ -1,0 +1,8 @@
+name = "context7"
+description = "Context7 MCP server for documentation lookup"
+
+[firewall]
+domains = [
+  "api.context7.com",
+  "context7.com",
+]

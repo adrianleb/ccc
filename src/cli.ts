@@ -14,6 +14,20 @@ import {
 } from "./agents/loader.ts";
 import type { Agent } from "./agents/types.ts";
 import {
+  loadExtensions,
+  listAvailableExtensions,
+  enableExtensions,
+  disableExtension,
+  isExtensionEnabled,
+  getExtensionsDir,
+} from "./extensions/loader.ts";
+import {
+  getUserFirewallDomains,
+  addUserFirewallDomain,
+  removeUserFirewallDomain,
+  getFirewallConfigPath,
+} from "./firewall/config.ts";
+import {
   checkAuthStatus,
   checkAgentInstalled,
   installAgentInContainer,
@@ -41,6 +55,7 @@ import {
   killSession,
   showLogs,
   restartContainer,
+  getContainerStatus,
   type InitOptions,
 } from "./deploy/local.ts";
 import {
@@ -53,6 +68,8 @@ import {
   showRemoteLogs,
   restartRemote,
   sshExec,
+  getRemoteHostStatus,
+  updateRemoteBinary,
 } from "./deploy/remote.ts";
 import * as ui from "./utils/ui.ts";
 import {
@@ -298,11 +315,15 @@ export function createCLI(): Command {
       ui.item(`Git config: ${gitUserName} <${gitUserEmail}>`, "ok");
 
       ui.header(ui.step(3, 5, "Generating container files"));
+      const extensions = Object.values(loadExtensions());
+      const userFirewallDomains = getUserFirewallDomains();
       generateFiles({
         agents: selectedAgents,
         outputDir: options.output,
         gitUserName,
         gitUserEmail,
+        extensions,
+        userFirewallDomains,
       });
 
       ui.header(ui.step(4, 5, "Setting up container SSH key"));
@@ -346,6 +367,7 @@ export function createCLI(): Command {
     .command("build [target]")
     .description("Build/rebuild the container")
     .option("-o, --output <dir>", "Output directory", DEFAULT_OUTPUT_DIR)
+    .option("--no-cache", "Build without Docker cache")
     .action(async (target, options) => {
       const host = resolveTarget(target);
 
@@ -356,7 +378,7 @@ export function createCLI(): Command {
       if (host) {
         console.log(`\n${ui.symbols.package} ${ui.style.bold("Building container on")} ${ui.style.highlight(host)}...\n`);
         try {
-          await buildRemote(host);
+          await buildRemote(host, { noCache: options.noCache });
         } catch {
           process.exit(1);
         }
@@ -371,7 +393,7 @@ export function createCLI(): Command {
         process.exit(1);
       }
 
-      await buildContainer(options.output);
+      await buildContainer(options.output, { noCache: options.noCache });
     });
 
   program
@@ -400,18 +422,215 @@ export function createCLI(): Command {
 
   program
     .command("ls [target]")
-    .description("List active sessions")
+    .description("List all hosts and sessions (or sessions for a specific target)")
     .action((target) => {
-      const host = resolveTarget(target);
-
-      if (host) {
-        console.log(`\n${ui.symbols.terminal} ${ui.style.bold("Active sessions on")} ${ui.style.highlight(host)}:\n`);
-        listRemoteSessions(host);
+      // If specific target provided, just show that one
+      if (target) {
+        const host = resolveTarget(target);
+        if (host) {
+          console.log(`\n${ui.symbols.terminal} ${ui.style.bold("Active sessions on")} ${ui.style.highlight(host)}:\n`);
+          listRemoteSessions(host);
+          return;
+        }
+        console.log(`\n${ui.symbols.terminal} ${ui.style.bold("Active sessions (local):")}\n`);
+        listSessions(DEFAULT_CONTAINER_NAME);
         return;
       }
 
-      console.log(`\n${ui.symbols.terminal} ${ui.style.bold("Active sessions:")}\n`);
-      listSessions(DEFAULT_CONTAINER_NAME);
+      // Show all hosts and their sessions
+      const remotes = listRemotes();
+      const defaultTarget = getDefault();
+
+      console.log(`\n${ui.symbols.terminal} ${ui.style.bold("Hosts & Sessions")}\n`);
+
+      // Local host
+      const isLocalDefault = defaultTarget === "local";
+      const localMarker = isLocalDefault ? ` ${ui.style.success("(default)")}` : "";
+      console.log(`  ${ui.symbols.server} ${ui.style.bold("local")}${localMarker}`);
+
+      const localStatus = getContainerStatus(DEFAULT_CONTAINER_NAME);
+      if (!localStatus.exists) {
+        console.log(`    ${ui.style.dim("Container not initialized")}`);
+      } else if (!localStatus.running) {
+        console.log(`    ${ui.style.dim("Container stopped")}`);
+      } else {
+        if (localStatus.sessions.length === 0) {
+          console.log(`    ${ui.style.dim("No active sessions")}`);
+        } else {
+          for (const session of localStatus.sessions) {
+            console.log(`    ${ui.style.dim("•")} ${session}`);
+          }
+        }
+      }
+      console.log();
+
+      // Remote hosts
+      for (const [name, config] of Object.entries(remotes)) {
+        const isDefault = defaultTarget === `@${name}`;
+        const marker = isDefault ? ` ${ui.style.success("(default)")}` : "";
+        console.log(`  ${ui.symbols.cloud} ${ui.style.bold(`@${name}`)}${marker} ${ui.style.dim(`(${config.host})`)}`);
+
+        const remoteStatus = getRemoteHostStatus(config.host);
+        if (!remoteStatus.reachable) {
+          console.log(`    ${ui.style.warning("unreachable")}`);
+        } else if (!remoteStatus.containerExists) {
+          console.log(`    ${ui.style.dim("Container not initialized")}`);
+        } else if (!remoteStatus.containerRunning) {
+          console.log(`    ${ui.style.dim("Container stopped")}`);
+        } else {
+          if (remoteStatus.sessions.length === 0) {
+            console.log(`    ${ui.style.dim("No active sessions")}`);
+          } else {
+            for (const session of remoteStatus.sessions) {
+              console.log(`    ${ui.style.dim("•")} ${session}`);
+            }
+          }
+        }
+        console.log();
+      }
+
+      if (Object.keys(remotes).length === 0) {
+        console.log(`  ${ui.style.dim("No remotes configured")}`);
+        ui.hint(`Add a remote: ${ui.style.command("ccc remote add <name> <user@host>")}`);
+      }
+    });
+
+  program
+    .command("status")
+    .description("Show status of all hosts (containers, takopi, sessions, agents)")
+    .action(() => {
+      const remotes = listRemotes();
+      const defaultTarget = getDefault();
+
+      console.log(`\n${ui.symbols.gear} ${ui.style.bold("Host Status")}\n`);
+
+      // Table header
+      const hostWidth = 16;
+      const statusWidth = 12;
+      const takopiWidth = 10;
+      const sessionsWidth = 6;
+
+      console.log(
+        `  ${ui.style.dim("HOST".padEnd(hostWidth))}` +
+          `${ui.style.dim("STATUS".padEnd(statusWidth))}` +
+          `${ui.style.dim("TAKOPI".padEnd(takopiWidth))}` +
+          `${ui.style.dim("SESS".padEnd(sessionsWidth))}` +
+          `${ui.style.dim("AGENTS")}`
+      );
+      console.log(`  ${ui.style.dim("─".repeat(hostWidth + statusWidth + takopiWidth + sessionsWidth + 20))}`);
+
+      // Helper to format a row with proper padding
+      const formatRow = (
+        host: string,
+        statusIcon: string,
+        statusRaw: string,
+        statusStyled: string,
+        takopiIcon: string,
+        takopiRaw: string,
+        takopiStyled: string,
+        sessions: number,
+        agents: string[]
+      ) => {
+        const statusPad = " ".repeat(Math.max(0, statusWidth - statusRaw.length - 2));
+        const takopiPad = " ".repeat(Math.max(0, takopiWidth - takopiRaw.length - 2));
+        const sessionsStr = String(sessions);
+        const sessionsPad = " ".repeat(Math.max(0, sessionsWidth - sessionsStr.length));
+        const agentsStr = agents.length > 0 ? agents.join(", ") : ui.style.dim("-");
+        console.log(
+          `  ${host.padEnd(hostWidth)}` +
+            `${statusIcon} ${statusStyled}${statusPad}` +
+            `${takopiIcon} ${takopiStyled}${takopiPad}` +
+            `${sessionsStr}${sessionsPad}` +
+            `${agentsStr}`
+        );
+      };
+
+      // Local host
+      const localLabel = defaultTarget === "local" ? "local *" : "local";
+      const localStatus = getContainerStatus(DEFAULT_CONTAINER_NAME);
+
+      if (!localStatus.exists) {
+        formatRow(
+          localLabel,
+          ui.style.dim("○"), "not init", ui.style.dim("not init"),
+          ui.style.dim("-"), "-", ui.style.dim("-"),
+          0, []
+        );
+      } else if (!localStatus.running) {
+        formatRow(
+          localLabel,
+          ui.style.warn(), "stopped", ui.style.warning("stopped"),
+          ui.style.dim("-"), "-", ui.style.dim("-"),
+          0, []
+        );
+      } else {
+        if (localStatus.takopi) {
+          formatRow(
+            localLabel,
+            ui.style.ok(), "running", ui.style.success("running"),
+            ui.style.ok(), "running", ui.style.success("running"),
+            localStatus.sessions.length, localStatus.agents
+          );
+        } else {
+          formatRow(
+            localLabel,
+            ui.style.ok(), "running", ui.style.success("running"),
+            ui.style.dim("○"), "off", ui.style.dim("off"),
+            localStatus.sessions.length, localStatus.agents
+          );
+        }
+      }
+
+      // Remote hosts
+      for (const [name, config] of Object.entries(remotes)) {
+        const isDefault = defaultTarget === `@${name}`;
+        const label = isDefault ? `@${name} *` : `@${name}`;
+        const remoteStatus = getRemoteHostStatus(config.host);
+
+        if (!remoteStatus.reachable) {
+          formatRow(
+            label,
+            ui.style.fail(), "unreachable", ui.style.error("unreachable"),
+            ui.style.dim("-"), "-", ui.style.dim("-"),
+            0, []
+          );
+        } else if (!remoteStatus.containerExists) {
+          formatRow(
+            label,
+            ui.style.dim("○"), "not init", ui.style.dim("not init"),
+            ui.style.dim("-"), "-", ui.style.dim("-"),
+            0, []
+          );
+        } else if (!remoteStatus.containerRunning) {
+          formatRow(
+            label,
+            ui.style.warn(), "stopped", ui.style.warning("stopped"),
+            ui.style.dim("-"), "-", ui.style.dim("-"),
+            0, []
+          );
+        } else {
+          if (remoteStatus.takopi) {
+            formatRow(
+              label,
+              ui.style.ok(), "running", ui.style.success("running"),
+              ui.style.ok(), "running", ui.style.success("running"),
+              remoteStatus.sessions.length, remoteStatus.agents
+            );
+          } else {
+            formatRow(
+              label,
+              ui.style.ok(), "running", ui.style.success("running"),
+              ui.style.dim("○"), "off", ui.style.dim("off"),
+              remoteStatus.sessions.length, remoteStatus.agents
+            );
+          }
+        }
+      }
+
+      console.log();
+      console.log(`  ${ui.style.dim("* = default target")}`);
+
+      ui.hint(`Use ${ui.style.command("ccc ls")} to see session details`);
     });
 
   program
@@ -466,11 +685,30 @@ export function createCLI(): Command {
     .command("update [target]")
     .description("Update agents in the container to latest versions")
     .option("-a, --agent <name>", "Specific agent to update (default: all)")
+    .option("--binary", "Update the ccc binary on remote host")
     .action(async (target, options) => {
       const host = resolveTarget(target);
       const containerName = DEFAULT_CONTAINER_NAME;
       const { execSync } = await import("child_process");
       const agents = getAgents();
+
+      // Update binary on remote if requested
+      if (options.binary) {
+        if (!host) {
+          ui.error("--binary flag is only for remote targets");
+          console.log(`\n  Usage: ${ui.style.command("ccc update @remote --binary")}`);
+          process.exit(1);
+        }
+        console.log(`\n${ui.symbols.package} ${ui.style.bold("Updating ccc binary on")} ${ui.style.highlight(host)}...\n`);
+        try {
+          await updateRemoteBinary(host);
+          ui.success("Binary updated!");
+        } catch (error) {
+          ui.error(`Failed to update binary: ${error}`);
+          process.exit(1);
+        }
+        return;
+      }
 
       console.log(`\n${ui.symbols.package} ${ui.style.bold("Updating agents...")}\n`);
 
@@ -490,7 +728,7 @@ export function createCLI(): Command {
         ui.item(`Updating ${name}...`, "pending");
 
         try {
-          const updateCmd = `docker exec ${containerName} sh -c "${agent.installCmd}"`;
+          const updateCmd = `docker exec ${containerName} bash -c "${agent.installCmd}"`;
           if (host) {
             execSync(`ssh ${host} "${updateCmd}"`, { stdio: "inherit" });
           } else {
@@ -707,6 +945,7 @@ export function createCLI(): Command {
     .description("Add an agent (enables config, rebuilds container, runs auth)")
     .argument("[target]", "Remote target (@alias) or local")
     .option("--no-build", "Only enable config, skip rebuild (for adding multiple agents)")
+    .option("--no-cache", "Build without Docker cache")
     .option("-o, --output <dir>", "Output directory", DEFAULT_OUTPUT_DIR)
     .action(async (name, target, options) => {
       const host = resolveTarget(target);
@@ -755,7 +994,7 @@ export function createCLI(): Command {
             // For now, just rebuild which will use existing files
             // TODO: implement remote file regeneration
             ui.warning("Remote agent add requires manual file sync. Running rebuild...");
-            await buildRemote(host);
+            await buildRemote(host, { noCache: options.noCache });
           } else {
             if (!existsSync(join(options.output, "Dockerfile"))) {
               ui.error("No Dockerfile found. Run 'ccc init' first.");
@@ -764,14 +1003,18 @@ export function createCLI(): Command {
 
             // Regenerate files with all agents
             console.log(`  ${ui.style.dim("Regenerating Docker files with all agents...")}`);
+            const allExtensions = Object.values(loadExtensions());
+            const allUserDomains = getUserFirewallDomains();
             generateFiles({
               agents: allAgents,
               outputDir: options.output,
+              extensions: allExtensions,
+              userFirewallDomains: allUserDomains,
             });
 
             // Build container
             console.log(`\n  ${ui.style.dim("Building container...")}\n`);
-            await buildContainer(options.output);
+            await buildContainer(options.output, { noCache: options.noCache });
           }
           ui.item("Container rebuilt", "ok");
 
@@ -940,6 +1183,179 @@ export function createCLI(): Command {
 
       setDefaultAgent(name);
       ui.success(`Default agent set to: ${ui.style.highlight(name)}`);
+    });
+
+  // Firewall management commands
+  const firewallCmd = program.command("firewall").description("Manage firewall domains");
+
+  firewallCmd
+    .command("list")
+    .alias("ls")
+    .description("List all firewall domains by source")
+    .action(() => {
+      const agents = getAgents();
+      const extensions = loadExtensions();
+      const userDomains = getUserFirewallDomains();
+
+      console.log(`\n${ui.symbols.shield} ${ui.style.bold("Firewall Domains")}\n`);
+
+      // Agent domains
+      console.log(`  ${ui.style.bold("Agents:")}`);
+      if (Object.keys(agents).length === 0) {
+        console.log(`    ${ui.style.dim("(no agents enabled)")}`);
+      } else {
+        for (const [name, agent] of Object.entries(agents)) {
+          if (agent.firewallDomains.length > 0) {
+            console.log(`    ${ui.style.highlight(name)} ${ui.style.dim(`(${agent.firewallDomains.length} domains)`)}`);
+            for (const domain of agent.firewallDomains) {
+              console.log(`      ${ui.style.dim("•")} ${domain}`);
+            }
+          }
+        }
+      }
+      console.log();
+
+      // Extension domains
+      console.log(`  ${ui.style.bold("Extensions:")}`);
+      if (Object.keys(extensions).length === 0) {
+        console.log(`    ${ui.style.dim("(no extensions enabled)")}`);
+        ui.hint(`Enable extensions: ${ui.style.command("ccc extension add takopi")}`);
+      } else {
+        for (const [name, ext] of Object.entries(extensions)) {
+          if (ext.firewallDomains.length > 0) {
+            console.log(`    ${ui.style.highlight(name)} ${ui.style.dim(`(${ext.firewallDomains.length} domains)`)}`);
+            for (const domain of ext.firewallDomains) {
+              console.log(`      ${ui.style.dim("•")} ${domain}`);
+            }
+          }
+        }
+      }
+      console.log();
+
+      // User domains
+      console.log(`  ${ui.style.bold("User:")}`);
+      if (userDomains.length === 0) {
+        console.log(`    ${ui.style.dim("(no custom domains)")}`);
+        ui.hint(`Add custom domain: ${ui.style.command("ccc firewall add example.com")}`);
+      } else {
+        for (const domain of userDomains) {
+          console.log(`    ${ui.style.dim("•")} ${domain}`);
+        }
+      }
+      console.log();
+
+      // Total count
+      const allDomains = new Set<string>();
+      for (const agent of Object.values(agents)) {
+        for (const d of agent.firewallDomains) allDomains.add(d);
+      }
+      for (const ext of Object.values(extensions)) {
+        for (const d of ext.firewallDomains) allDomains.add(d);
+      }
+      for (const d of userDomains) allDomains.add(d);
+
+      console.log(`  ${ui.style.dim("Total unique domains:")} ${ui.style.highlight(String(allDomains.size))}`);
+      ui.hint(`Config file: ${ui.style.path(getFirewallConfigPath())}`);
+    });
+
+  firewallCmd
+    .command("add <domain>")
+    .description("Add a custom firewall domain")
+    .action((domain) => {
+      if (addUserFirewallDomain(domain)) {
+        ui.success(`Added domain: ${ui.style.highlight(domain)}`);
+        ui.hint("Rebuild container to apply: " + ui.style.command("ccc build"));
+      } else {
+        ui.warning(`Domain already exists: ${domain}`);
+      }
+    });
+
+  firewallCmd
+    .command("rm <domain>")
+    .alias("remove")
+    .description("Remove a custom firewall domain")
+    .action((domain) => {
+      if (removeUserFirewallDomain(domain)) {
+        ui.success(`Removed domain: ${domain}`);
+        ui.hint("Rebuild container to apply: " + ui.style.command("ccc build"));
+      } else {
+        ui.error(`Domain not found: ${domain}`);
+        ui.hint("Note: Only user-added domains can be removed. Agent and extension domains are managed via their configs.");
+      }
+    });
+
+  // Extension management commands
+  const extensionCmd = program.command("extension").description("Manage extensions (takopi, context7, etc.)");
+
+  extensionCmd
+    .command("list")
+    .alias("ls")
+    .description("List available and enabled extensions")
+    .action(() => {
+      const templates = listAvailableExtensions();
+      const enabled = loadExtensions();
+
+      console.log(`\n${ui.symbols.gear} ${ui.style.bold("Extensions")}\n`);
+
+      for (const template of templates) {
+        const isEnabled = isExtensionEnabled(template.name);
+        const statusIcon = isEnabled ? ui.style.ok() : ui.style.dim("○");
+        const statusText = isEnabled ? ui.style.success("enabled") : ui.style.dim("available");
+
+        console.log(`  ${statusIcon} ${ui.style.bold(template.name)} ${statusText}`);
+        console.log(`    ${ui.style.dim(template.description)}`);
+
+        if (isEnabled) {
+          const ext = enabled[template.name];
+          if (ext && ext.firewallDomains.length > 0) {
+            console.log(`    ${ui.style.dim("Domains:")} ${ext.firewallDomains.join(", ")}`);
+          }
+        }
+        console.log();
+      }
+
+      ui.hint(`Enable: ${ui.style.command("ccc extension add <name>")}`);
+    });
+
+  extensionCmd
+    .command("add <name>")
+    .description("Enable an extension")
+    .action((name) => {
+      const templates = listAvailableExtensions();
+      const template = templates.find((t) => t.name === name);
+
+      if (!template) {
+        ui.error(`Unknown extension: ${name}`);
+        console.log(`\n  Available: ${templates.map((t) => t.name).join(", ")}`);
+        process.exit(1);
+      }
+
+      if (isExtensionEnabled(name)) {
+        ui.warning(`Extension '${name}' is already enabled`);
+        return;
+      }
+
+      const enabled = enableExtensions([name]);
+      if (enabled.length > 0) {
+        ui.success(`Enabled extension: ${ui.style.highlight(name)}`);
+        ui.hint("Rebuild container to apply firewall changes: " + ui.style.command("ccc build"));
+      }
+    });
+
+  extensionCmd
+    .command("rm <name>")
+    .alias("remove")
+    .description("Disable an extension")
+    .action((name) => {
+      if (!isExtensionEnabled(name)) {
+        ui.error(`Extension '${name}' is not enabled`);
+        process.exit(1);
+      }
+
+      if (disableExtension(name)) {
+        ui.success(`Disabled extension: ${name}`);
+        ui.hint("Rebuild container to apply firewall changes: " + ui.style.command("ccc build"));
+      }
     });
 
   program

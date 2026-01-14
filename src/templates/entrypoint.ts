@@ -7,6 +7,21 @@ export interface EntrypointOptions {
 export function generateEntrypoint(options: EntrypointOptions): string {
   const { agents } = options;
 
+  // Generate install checks for each agent
+  const agentInstalls = agents
+    .map((agent) => {
+      // Escape single quotes in commands
+      const versionCmd = agent.versionCmd.replace(/'/g, "'\\''");
+      const installCmd = agent.installCmd.replace(/'/g, "'\\''");
+      return `
+# Install ${agent.name} if not present
+if ! ${versionCmd} &>/dev/null; then
+    echo "Installing ${agent.name}..."
+    ${installCmd} || echo "Warning: Failed to install ${agent.name}"
+fi`;
+    })
+    .join("\n");
+
   const primaryAgent = agents[0];
   const versionCmd = primaryAgent?.versionCmd || "echo 'no agent'";
 
@@ -41,7 +56,11 @@ git config --global delta.side-by-side true
 git config --global merge.conflictstyle diff3
 git config --global diff.colorMoved default
 
+# Install agents on first run (into persistent volume)
+${agentInstalls}
+
 echo "Container ready. Agent version: $(${versionCmd} 2>/dev/null || echo not found)"
 exec "$@"
 `;
 }
+

@@ -3,6 +3,7 @@ export interface Agent {
   installCmd: string;
   versionCmd: string;
   runCmd: string;
+  authCmd?: string; // Separate auth command (e.g., "codex login --device-auth")
   firewallDomains: string[];
   skipPermissionsFlag?: string;
   configPath?: string;
@@ -42,6 +43,7 @@ export interface AgentConfig {
     method: "oauth" | "api_key" | "none";
     instructions?: string;
     auth_check_files?: string[];
+    auth_cmd?: string; // Command to run for auth (defaults to run_cmd)
   };
 
   dockerfile?: {

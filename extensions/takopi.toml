@@ -1,0 +1,7 @@
+name = "takopi"
+description = "Telegram bot for chatting with agents"
+
+[firewall]
+domains = [
+  "api.telegram.org",
+]

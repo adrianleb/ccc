@@ -10,7 +10,13 @@
   "scripts": {
     "dev": "bun run src/index.ts",
     "build": "bun build src/index.ts --compile --outfile dist/ccc",
+    "build:all": "bun run build:linux-x64 && bun run build:linux-arm64 && bun run build:darwin-x64 && bun run build:darwin-arm64",
+    "build:linux-x64": "bun build src/index.ts --compile --target=bun-linux-x64 --outfile dist/ccc-linux-x64",
+    "build:linux-arm64": "bun build src/index.ts --compile --target=bun-linux-arm64 --outfile dist/ccc-linux-arm64",
+    "build:darwin-x64": "bun build src/index.ts --compile --target=bun-darwin-x64 --outfile dist/ccc-darwin-x64",
+    "build:darwin-arm64": "bun build src/index.ts --compile --target=bun-darwin-arm64 --outfile dist/ccc-darwin-arm64",
     "install-local": "bun run build && mkdir -p ~/.local/bin && cp dist/ccc ~/.local/bin/ccc",
+    "release": "./scripts/release.sh",
     "test": "bun test",
     "test:coverage": "bun test --coverage",
     "lint": "oxlint src",

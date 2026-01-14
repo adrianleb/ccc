@@ -36,11 +36,6 @@ domains = [
   "codeload.github.com",
   "gitlab.com",
   "bitbucket.org",
-  # Telegram (for takopi)
-  "api.telegram.org",
-  # Context7 MCP
-  "api.context7.com",
-  "context7.com",
 ]
 
 [auth]

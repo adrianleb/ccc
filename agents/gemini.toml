@@ -46,6 +46,7 @@ domains = [
 [auth]
 method = "oauth"
 instructions = "Run 'gemini' and follow the Google OAuth flow (free tier: 60 req/min, 1000 req/day), or set GEMINI_API_KEY from https://aistudio.google.com/apikey"
+auth_check_files = ["settings.json", "credentials.json"]
 
 [dockerfile]
 snippet = """

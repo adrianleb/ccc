@@ -16,6 +16,8 @@ export interface InitOptions {
   containerName?: string;
   timezone?: string;
   projectsDir?: string;
+  gitUserName?: string;
+  gitUserEmail?: string;
 }
 
 export function generateFiles(options: InitOptions): void {
@@ -25,6 +27,8 @@ export function generateFiles(options: InitOptions): void {
     containerName = "ccc",
     timezone = "UTC",
     projectsDir = "./projects",
+    gitUserName,
+    gitUserEmail,
   } = options;
 
   if (!existsSync(outputDir)) {
@@ -35,7 +39,7 @@ export function generateFiles(options: InitOptions): void {
   writeFileSync(join(outputDir, "Dockerfile"), dockerfile);
   ui.item("Dockerfile", "ok");
 
-  const compose = generateCompose({ containerName, timezone, projectsDir, agents });
+  const compose = generateCompose({ containerName, timezone, projectsDir, agents, gitUserName, gitUserEmail });
   writeFileSync(join(outputDir, "docker-compose.yml"), compose);
   ui.item("docker-compose.yml", "ok");
 
@@ -56,26 +60,6 @@ export function generateFiles(options: InitOptions): void {
     mkdirSync(projectsPath, { recursive: true });
   }
   ui.item("projects/", "ok");
-
-  const envPath = join(outputDir, ".env");
-  if (!existsSync(envPath)) {
-    writeFileSync(
-      envPath,
-      `# Git configuration (required)
-GIT_USER_NAME=Your Name
-GIT_USER_EMAIL=your@email.com
-
-# Optional: Telegram bot for takopi notifications
-TELEGRAM_BOT_TOKEN=
-
-# Timezone (default: UTC)
-TZ=UTC
-`
-    );
-    ui.item(".env " + ui.style.dim("(edit with your details)"), "ok");
-  } else {
-    ui.item(".env " + ui.style.dim("(already exists)"), "ok");
-  }
 }
 
 export async function generateContainerSSHKeys(outputDir: string): Promise<string> {

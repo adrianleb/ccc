@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import * as TOML from "@iarna/toml";
@@ -16,6 +16,7 @@ function configToAgent(config: AgentConfig): Agent {
     firewallDomains: config.firewall?.domains || [],
     skipPermissionsFlag: config.skip_permissions_flag,
     configPath: config.config_path,
+    authCheckFiles: config.auth?.auth_check_files,
 
     getAuthInstructions(): string {
       return config.auth?.instructions || `Run '${config.run_cmd}' to authenticate.`;
@@ -89,4 +90,42 @@ export function enableAgents(names: string[]): string[] {
   }
 
   return enabled;
+}
+
+export function disableAgent(name: string): boolean {
+  const filePath = join(AGENTS_DIR, `${name}.toml`);
+  if (existsSync(filePath)) {
+    unlinkSync(filePath);
+    return true;
+  }
+  return false;
+}
+
+export function isAgentEnabled(name: string): boolean {
+  return existsSync(join(AGENTS_DIR, `${name}.toml`));
+}
+
+export function getAgentConfig(name: string): AgentConfig | undefined {
+  // First check enabled agents
+  const filePath = join(AGENTS_DIR, `${name}.toml`);
+  if (existsSync(filePath)) {
+    try {
+      const content = readFileSync(filePath, "utf-8");
+      return TOML.parse(content) as unknown as AgentConfig;
+    } catch {
+      return undefined;
+    }
+  }
+
+  // Fall back to template
+  const template = getTemplate(name);
+  if (template) {
+    try {
+      return TOML.parse(template.content) as unknown as AgentConfig;
+    } catch {
+      return undefined;
+    }
+  }
+
+  return undefined;
 }

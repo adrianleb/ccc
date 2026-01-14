@@ -67,9 +67,9 @@ export function checkRemoteDocker(host: string): boolean {
 export async function initRemote(
   host: string,
   agents: Agent[],
-  options: { build?: boolean } = {}
+  options: { build?: boolean; gitUserName?: string; gitUserEmail?: string } = {}
 ): Promise<void> {
-  const { build = false } = options;
+  const { build = false, gitUserName = "", gitUserEmail = "" } = options;
 
   ui.header(ui.step(1, 5, "Testing SSH connection"));
   if (!testSSHConnection(host)) {
@@ -108,7 +108,7 @@ export async function initRemote(
   writeFileSync(join(tempDir, "Dockerfile"), dockerfile);
   ui.item("Dockerfile", "ok");
 
-  const compose = generateCompose({ agents });
+  const compose = generateCompose({ agents, gitUserName, gitUserEmail });
   writeFileSync(join(tempDir, "docker-compose.yml"), compose);
   ui.item("docker-compose.yml", "ok");
 
@@ -136,21 +136,6 @@ export async function initRemote(
     );
   } catch {}
 
-  writeFileSync(
-    join(tempDir, ".env"),
-    `# Git configuration (required)
-GIT_USER_NAME=Your Name
-GIT_USER_EMAIL=your@email.com
-
-# Optional: Telegram bot for takopi notifications
-TELEGRAM_BOT_TOKEN=
-
-# Timezone (default: UTC)
-TZ=UTC
-`
-  );
-  ui.item(".env template", "ok");
-
   ui.header(ui.step(4, 5, "Copying files to remote"));
 
   sshExec(host, `mkdir -p ${REMOTE_CCC_DIR} ${REMOTE_BIN_DIR}`, { ignoreError: true });
@@ -161,7 +146,6 @@ TZ=UTC
   scpFile(join(tempDir, "docker-compose.yml"), host, `${REMOTE_CCC_DIR}/docker-compose.yml`);
   scpFile(join(tempDir, "entrypoint.sh"), host, `${REMOTE_CCC_DIR}/entrypoint.sh`);
   scpFile(join(tempDir, "init-firewall.sh"), host, `${REMOTE_CCC_DIR}/init-firewall.sh`);
-  scpFile(join(tempDir, ".env"), host, `${REMOTE_CCC_DIR}/.env`);
   ui.item("Copied container files", "ok");
 
   scpDir(sshKeysDir, host, `${REMOTE_CCC_DIR}/`);
@@ -194,10 +178,9 @@ TZ=UTC
   ui.success("Remote container initialized!");
 
   console.log(`\n  ${ui.symbols.lightning} ${ui.style.bold("Next steps:")}`);
-  console.log(`  ${ui.style.dim("1.")} SSH to remote and edit ${ui.style.path("~/.ccc/.env")}`);
-  console.log(`  ${ui.style.dim("2.")} Add the SSH key above to GitHub`);
-  console.log(`  ${ui.style.dim("3.")} Build the container on remote`);
-  console.log(`  ${ui.style.dim("4.")} Connect: ${ui.style.command(`ccc @remote`)}`);
+  console.log(`  ${ui.style.dim("1.")} Add the SSH key above to GitHub`);
+  console.log(`  ${ui.style.dim("2.")} Build the container on remote`);
+  console.log(`  ${ui.style.dim("3.")} Connect: ${ui.style.command(`ccc @remote`)}`);
 
   ui.hint(`You can also SSH directly: ${ui.style.command(`ssh ${host}`)}, then run ${ui.style.command("ccc-server")}`);
 }

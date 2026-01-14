@@ -3,8 +3,23 @@ import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 
-import { loadAgents, listAvailableAgents, enableAgents, getAgentsDir } from "./agents/loader.ts";
+import {
+  loadAgents,
+  listAvailableAgents,
+  enableAgents,
+  getAgentsDir,
+  disableAgent,
+  isAgentEnabled,
+  getAgentConfig,
+} from "./agents/loader.ts";
 import type { Agent } from "./agents/types.ts";
+import {
+  checkAuthStatus,
+  checkAgentInstalled,
+  installAgentInContainer,
+  runAgentAuth,
+  checkRemoteContainerRunning,
+} from "./agents/auth.ts";
 import {
   loadConfig,
   addRemote,
@@ -215,8 +230,30 @@ export function createCLI(): Command {
         console.log(`${ui.symbols.rocket} ${ui.style.bold("Initializing remote container on")} ${ui.style.highlight(host)}\n`);
         console.log(`  ${ui.style.dim("Agents:")} ${selectedAgents.map((a) => a.name).join(", ")}\n`);
 
+        // Prompt for Git config
+        const readline = await import("readline");
+        const rl = readline.createInterface({
+          input: process.stdin,
+          output: process.stdout,
+        });
+
+        const gitUserName = await new Promise<string>((resolve) => {
+          rl.question(`  ${ui.style.dim("Git user name:")} `, (answer) => {
+            resolve(answer.trim() || "Developer");
+          });
+        });
+
+        const gitUserEmail = await new Promise<string>((resolve) => {
+          rl.question(`  ${ui.style.dim("Git email:")} `, (answer) => {
+            resolve(answer.trim() || "dev@example.com");
+          });
+        });
+        rl.close();
+
+        console.log();
+
         try {
-          await initRemote(host, selectedAgents, { build: options.build });
+          await initRemote(host, selectedAgents, { build: options.build, gitUserName, gitUserEmail });
         } catch (error) {
           process.exit(1);
         }
@@ -227,7 +264,7 @@ export function createCLI(): Command {
       console.log(`${ui.symbols.rocket} ${ui.style.bold("Initializing local coding container...")}\n`);
       console.log(`  ${ui.style.dim("Agents:")} ${selectedAgents.map((a) => a.name).join(", ")}\n`);
 
-      ui.header(ui.step(1, 4, "Checking SSH keys"));
+      ui.header(ui.step(1, 5, "Checking SSH keys"));
       const localSshKey = join(homedir(), ".ssh", "id_ed25519");
       if (existsSync(localSshKey)) {
         ui.item(`Local SSH key found: ${ui.style.path(localSshKey)}`, "ok");
@@ -236,13 +273,37 @@ export function createCLI(): Command {
         ui.hint(`Run ${ui.style.command("ccc setup-ssh")} to generate one`);
       }
 
-      ui.header(ui.step(2, 4, "Generating container files"));
+      ui.header(ui.step(2, 5, "Git configuration"));
+      const readline = await import("readline");
+      const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+      });
+
+      const gitUserName = await new Promise<string>((resolve) => {
+        rl.question(`  ${ui.style.dim("Git user name:")} `, (answer) => {
+          resolve(answer.trim() || "Developer");
+        });
+      });
+
+      const gitUserEmail = await new Promise<string>((resolve) => {
+        rl.question(`  ${ui.style.dim("Git email:")} `, (answer) => {
+          resolve(answer.trim() || "dev@example.com");
+        });
+      });
+      rl.close();
+
+      ui.item(`Git config: ${gitUserName} <${gitUserEmail}>`, "ok");
+
+      ui.header(ui.step(3, 5, "Generating container files"));
       generateFiles({
         agents: selectedAgents,
         outputDir: options.output,
+        gitUserName,
+        gitUserEmail,
       });
 
-      ui.header(ui.step(3, 4, "Setting up container SSH key"));
+      ui.header(ui.step(4, 5, "Setting up container SSH key"));
       const sshDir = join(options.output, "ssh-keys");
       await generateContainerSSHKeys(options.output);
 
@@ -255,7 +316,7 @@ export function createCLI(): Command {
         console.log(`  ${ui.style.dim("─".repeat(60))}`);
       }
 
-      ui.header(ui.step(4, 4, "Container setup"));
+      ui.header(ui.step(5, 5, "Container setup"));
 
       console.log(`\n  ${ui.symbols.folder} Output directory: ${ui.style.path(options.output)}`);
 
@@ -272,10 +333,9 @@ export function createCLI(): Command {
       ui.success("Container initialized!");
 
       console.log(`\n  ${ui.symbols.lightning} ${ui.style.bold("Next steps:")}`);
-      console.log(`  ${ui.style.dim("1.")} Edit ${ui.style.path(`${options.output}/.env`)} with your Git config`);
-      console.log(`  ${ui.style.dim("2.")} Add the SSH key above to GitHub`);
-      console.log(`  ${ui.style.dim("3.")} Build the container: ${ui.style.command("ccc build")}`);
-      console.log(`  ${ui.style.dim("4.")} Start coding: ${ui.style.command("ccc")}`);
+      console.log(`  ${ui.style.dim("1.")} Add the SSH key above to GitHub`);
+      console.log(`  ${ui.style.dim("2.")} Build the container: ${ui.style.command("ccc build")}`);
+      console.log(`  ${ui.style.dim("3.")} Start coding: ${ui.style.command("ccc")}`);
 
       ui.hint(`Detach from session: ${ui.style.command("Ctrl+Space Ctrl+Q")}`);
     });
@@ -510,6 +570,342 @@ export function createCLI(): Command {
     .action((target) => {
       setDefault(target);
       ui.success(`Default target set to: ${ui.style.highlight(target)}`);
+    });
+
+  // Agent management commands
+  const agentCmd = program.command("agent").description("Manage coding agents");
+
+  agentCmd
+    .command("list")
+    .alias("ls")
+    .description("List available and installed agents with auth status")
+    .argument("[target]", "Remote target (@alias) or local")
+    .action(async (target) => {
+      const host = resolveTarget(target);
+      const templates = listAvailableAgents();
+      const enabledAgents = getAgents();
+
+      console.log(`\n${ui.symbols.gear} ${ui.style.bold("Agent Status")}`);
+      if (host) {
+        console.log(`  ${ui.style.dim("Target:")} ${ui.style.highlight(host)}`);
+      }
+      console.log();
+
+      // Table header
+      const nameWidth = 12;
+      const statusWidth = 12;
+      const authWidth = 22;
+
+      console.log(
+        `  ${ui.style.dim("NAME".padEnd(nameWidth))}` +
+          `${ui.style.dim("STATUS".padEnd(statusWidth))}` +
+          `${ui.style.dim("AUTH".padEnd(authWidth))}` +
+          `${ui.style.dim("VERSION")}`
+      );
+      console.log(`  ${ui.style.dim("─".repeat(60))}`);
+
+      // Check if container is running for installed/auth checks
+      let containerRunning = false;
+      try {
+        if (host) {
+          containerRunning = checkRemoteContainerRunning(host);
+        } else {
+          const { execSync } = await import("child_process");
+          const result = execSync(
+            `docker inspect -f '{{.State.Running}}' ${DEFAULT_CONTAINER_NAME} 2>/dev/null`,
+            { encoding: "utf-8", stdio: "pipe" }
+          );
+          containerRunning = result.trim() === "true";
+        }
+      } catch {
+        containerRunning = false;
+      }
+
+      for (const template of templates) {
+        const agent = enabledAgents[template.name];
+        const config = getAgentConfig(template.name);
+        const isEnabled = isAgentEnabled(template.name);
+
+        let statusIcon: string;
+        let statusText: string;
+        let authIcon: string;
+        let authText: string;
+        let version = "-";
+
+        if (!isEnabled) {
+          statusIcon = ui.style.dim("○");
+          statusText = ui.style.dim("available");
+          authIcon = ui.style.dim("-");
+          authText = ui.style.dim("-");
+        } else if (!agent) {
+          statusIcon = ui.style.warn();
+          statusText = ui.style.warning("error");
+          authIcon = ui.style.dim("-");
+          authText = ui.style.dim("-");
+        } else if (!containerRunning) {
+          statusIcon = ui.style.ok();
+          statusText = ui.style.success("enabled");
+          authIcon = ui.style.dim("?");
+          authText = ui.style.dim("container stopped");
+        } else {
+          // Check if installed in container
+          const installStatus = checkAgentInstalled(agent, { host });
+
+          if (!installStatus.installed) {
+            statusIcon = ui.style.ok();
+            statusText = ui.style.success("enabled");
+            authIcon = ui.style.dim("-");
+            authText = ui.style.dim("not installed");
+          } else {
+            statusIcon = ui.style.ok();
+            statusText = ui.style.success("enabled");
+            version = installStatus.version || "-";
+
+            // Check auth status
+            if (config) {
+              const authStatus = checkAuthStatus(agent, config, { host });
+              if (authStatus.authenticated) {
+                authIcon = ui.style.ok();
+                authText = ui.style.success(authStatus.details || "authenticated");
+              } else {
+                authIcon = ui.style.dim("○");
+                authText = ui.style.dim(authStatus.details || "not authenticated");
+              }
+            } else {
+              authIcon = ui.style.dim("-");
+              authText = ui.style.dim("unknown");
+            }
+          }
+        }
+
+        // Truncate version if too long
+        if (version.length > 20) {
+          version = version.substring(0, 17) + "...";
+        }
+
+        console.log(
+          `  ${template.name.padEnd(nameWidth)}` +
+            `${statusIcon} ${statusText.padEnd(statusWidth - 2)}` +
+            `${authIcon} ${authText.padEnd(authWidth - 2)}` +
+            `${ui.style.dim(version)}`
+        );
+      }
+
+      // Show default agent
+      const defaultAgent = getDefaultAgent();
+      if (defaultAgent) {
+        console.log(`\n  ${ui.style.dim("Default:")} ${ui.style.highlight(defaultAgent)}`);
+      }
+
+      ui.hint(`Add agent: ${ui.style.command("ccc agent add <name>")}`);
+    });
+
+  agentCmd
+    .command("add <name>")
+    .description("Add and install an agent")
+    .argument("[target]", "Remote target (@alias) or local")
+    .option("--no-install", "Only enable config, skip container installation")
+    .action(async (name, target, options) => {
+      const host = resolveTarget(target);
+      const templates = listAvailableAgents();
+      const template = templates.find((t) => t.name === name);
+
+      if (!template) {
+        ui.error(`Unknown agent: ${name}`);
+        console.log(`\n  Available agents: ${templates.map((t) => t.name).join(", ")}`);
+        process.exit(1);
+      }
+
+      // Check if already enabled
+      if (isAgentEnabled(name)) {
+        ui.warning(`Agent '${name}' is already enabled`);
+      } else {
+        // Enable the agent (write TOML)
+        const enabled = enableAgents([name]);
+        if (enabled.length > 0) {
+          ui.item(`Enabled ${name} config`, "ok");
+        }
+      }
+
+      // Hot-install in container if running and --install is true
+      if (options.install) {
+        const agents = getAgents();
+        const agent = agents[name];
+
+        if (!agent) {
+          ui.error("Failed to load agent config");
+          process.exit(1);
+        }
+
+        // Check if container is running
+        let containerRunning = false;
+        try {
+          if (host) {
+            containerRunning = checkRemoteContainerRunning(host);
+          } else {
+            const { execSync } = await import("child_process");
+            const result = execSync(
+              `docker inspect -f '{{.State.Running}}' ${DEFAULT_CONTAINER_NAME} 2>/dev/null`,
+              { encoding: "utf-8", stdio: "pipe" }
+            );
+            containerRunning = result.trim() === "true";
+          }
+        } catch {
+          containerRunning = false;
+        }
+
+        if (containerRunning) {
+          console.log(
+            `\n${ui.symbols.package} ${ui.style.bold("Installing")} ${ui.style.highlight(name)} ${ui.style.dim("in container...")}`
+          );
+          const success = installAgentInContainer(agent, { host });
+          if (success) {
+            ui.item(`${name} installed`, "ok");
+          } else {
+            ui.item(`Failed to install ${name}`, "fail");
+          }
+        } else {
+          ui.hint("Container not running. Agent will be installed on next build.");
+        }
+      }
+
+      // Set as default if first agent
+      if (!getDefaultAgent()) {
+        setDefaultAgent(name);
+        ui.item(`Set ${name} as default agent`, "ok");
+      }
+
+      ui.success(`Agent '${name}' added!`);
+      ui.hint(`Authenticate: ${ui.style.command(`ccc agent auth ${name}`)}`);
+    });
+
+  agentCmd
+    .command("rm <name>")
+    .alias("remove")
+    .description("Remove an agent")
+    .argument("[target]", "Remote target (@alias) or local")
+    .action(async (name, target) => {
+      const host = resolveTarget(target);
+
+      if (!isAgentEnabled(name)) {
+        ui.error(`Agent '${name}' is not enabled`);
+        process.exit(1);
+      }
+
+      // Disable (remove TOML)
+      if (disableAgent(name)) {
+        ui.item(`Disabled ${name} config`, "ok");
+      }
+
+      // Update default if removed
+      if (getDefaultAgent() === name) {
+        const remaining = Object.keys(getAgents());
+        if (remaining.length > 0 && remaining[0]) {
+          setDefaultAgent(remaining[0]);
+          ui.item(`Default agent changed to ${remaining[0]}`, "ok");
+        }
+      }
+
+      ui.success(`Agent '${name}' removed!`);
+      ui.hint("Note: Agent binary remains in container. Rebuild to fully remove.");
+    });
+
+  agentCmd
+    .command("auth <name>")
+    .description("Authenticate an agent")
+    .argument("[target]", "Remote target (@alias) or local")
+    .action(async (name, target) => {
+      const host = resolveTarget(target);
+      const agents = getAgents();
+      const agent = agents[name];
+
+      if (!agent) {
+        ui.error(`Agent '${name}' not found or not enabled`);
+        const templates = listAvailableAgents();
+        if (templates.find((t) => t.name === name)) {
+          ui.hint(`Enable it first: ${ui.style.command(`ccc agent add ${name}`)}`);
+        }
+        process.exit(1);
+      }
+
+      const config = getAgentConfig(name);
+      if (!config) {
+        ui.error("Could not load agent config");
+        process.exit(1);
+      }
+
+      // Check if container is running
+      let containerRunning = false;
+      try {
+        if (host) {
+          containerRunning = checkRemoteContainerRunning(host);
+        } else {
+          const { execSync } = await import("child_process");
+          const result = execSync(
+            `docker inspect -f '{{.State.Running}}' ${DEFAULT_CONTAINER_NAME} 2>/dev/null`,
+            { encoding: "utf-8", stdio: "pipe" }
+          );
+          containerRunning = result.trim() === "true";
+        }
+      } catch {
+        containerRunning = false;
+      }
+
+      if (!containerRunning) {
+        ui.error("Container is not running");
+        ui.hint(`Start it first: ${ui.style.command("ccc start")}`);
+        process.exit(1);
+      }
+
+      console.log(
+        `\n${ui.symbols.key} ${ui.style.bold("Authenticating")} ${ui.style.highlight(name)}`
+      );
+      console.log(`\n  ${ui.style.dim(config.auth?.instructions || agent.getAuthInstructions())}`);
+      console.log();
+
+      // Run interactive auth
+      const success = runAgentAuth(agent, config, { host });
+
+      if (success) {
+        // Verify auth status
+        const authStatus = checkAuthStatus(agent, config, { host });
+        if (authStatus.authenticated) {
+          ui.success(`${name} authenticated!`);
+        } else {
+          ui.warning("Auth flow completed but verification failed");
+          ui.hint("This is normal for some agents. Try running the agent to verify.");
+        }
+      } else {
+        ui.error("Authentication failed");
+      }
+    });
+
+  agentCmd
+    .command("default [name]")
+    .description("Get or set the default agent")
+    .action((name) => {
+      if (!name) {
+        const current = getDefaultAgent();
+        if (current) {
+          console.log(
+            `\n${ui.symbols.star} ${ui.style.bold("Default agent:")} ${ui.style.highlight(current)}`
+          );
+        } else {
+          console.log(`\n${ui.style.dim("No default agent set")}`);
+          ui.hint(`Set one: ${ui.style.command("ccc agent default <name>")}`);
+        }
+        return;
+      }
+
+      const agents = getAgents();
+      if (!agents[name]) {
+        ui.error(`Agent '${name}' not found or not enabled`);
+        console.log(`\n  Enabled agents: ${Object.keys(agents).join(", ") || "(none)"}`);
+        process.exit(1);
+      }
+
+      setDefaultAgent(name);
+      ui.success(`Default agent set to: ${ui.style.highlight(name)}`);
     });
 
   program

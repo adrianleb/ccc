@@ -5,6 +5,8 @@ export interface ComposeOptions {
   timezone?: string;
   projectsDir?: string;
   agents?: Agent[];
+  gitUserName?: string;
+  gitUserEmail?: string;
 }
 
 export function generateCompose(options: ComposeOptions = {}): string {
@@ -12,36 +14,16 @@ export function generateCompose(options: ComposeOptions = {}): string {
     containerName = "ccc",
     timezone = "UTC",
     projectsDir = "./projects",
-    agents = [],
+    gitUserName = "",
+    gitUserEmail = "",
   } = options;
-
-  const agentVolumeMounts: string[] = [];
-  const agentVolumeDefinitions: string[] = [];
-
-  for (const agent of agents) {
-    if (agent.configPath) {
-      const volumeName = `${agent.name}-config`;
-      agentVolumeMounts.push(`      # ${agent.name} auth/config persistence`);
-      agentVolumeMounts.push(`      - ${volumeName}:${agent.configPath}`);
-      agentVolumeDefinitions.push(`  ${volumeName}:`);
-      agentVolumeDefinitions.push(`    name: ${containerName}-${agent.name}`);
-    }
-  }
-
-  const agentVolumeMountsStr = agentVolumeMounts.length > 0
-    ? "\n" + agentVolumeMounts.join("\n")
-    : "";
-
-  const agentVolumeDefsStr = agentVolumeDefinitions.length > 0
-    ? "\n" + agentVolumeDefinitions.join("\n")
-    : "";
 
   return `services:
   ${containerName}:
     build:
       context: .
       args:
-        TZ: \${TZ:-${timezone}}
+        TZ: ${timezone}
     container_name: ${containerName}
     hostname: ${containerName}
     restart: unless-stopped
@@ -51,24 +33,19 @@ export function generateCompose(options: ComposeOptions = {}): string {
       - NET_ADMIN
 
     environment:
-      - GIT_USER_NAME=\${GIT_USER_NAME}
-      - GIT_USER_EMAIL=\${GIT_USER_EMAIL}
-      - TELEGRAM_BOT_TOKEN=\${TELEGRAM_BOT_TOKEN:-}
+      - GIT_USER_NAME=${gitUserName}
+      - GIT_USER_EMAIL=${gitUserEmail}
       - NODE_OPTIONS=--max-old-space-size=4096
 
     volumes:
       # Projects directory - clone repos here
       - ${projectsDir}:/workspace:rw
 
-      # Command history persistence
-      - command-history:/commandhistory
+      # Home directory persistence (all user data, configs, auth)
+      - ccc-home:/home/ccc
 
-      # SSH keys for GitHub (generate dedicated key)
+      # SSH keys for GitHub (overrides home volume for .ssh)
       - ./ssh-keys:/home/ccc/.ssh:ro
-
-      # Takopi config persistence
-      - takopi-config:/home/ccc/.takopi
-${agentVolumeMountsStr}
 
     # Keep container running
     tty: true
@@ -78,11 +55,8 @@ ${agentVolumeMountsStr}
       - ccc-net
 
 volumes:
-  command-history:
-    name: ${containerName}-history
-  takopi-config:
-    name: ${containerName}-takopi
-${agentVolumeDefsStr}
+  ccc-home:
+    name: ${containerName}-home
 
 networks:
   ccc-net:

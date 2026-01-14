@@ -41,6 +41,7 @@ domains = [
 [auth]
 method = "oauth"
 instructions = "Run 'codex' and sign in with ChatGPT (requires Plus, Pro, Business, Edu, or Enterprise plan) or use an OpenAI API key."
+auth_check_files = ["auth.json", "config.json"]
 
 [dockerfile]
 snippet = """

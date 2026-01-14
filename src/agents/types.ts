@@ -6,8 +6,23 @@ export interface Agent {
   firewallDomains: string[];
   skipPermissionsFlag?: string;
   configPath?: string;
+  authCheckFiles?: string[];
   getAuthInstructions(): string;
   getDockerfileSnippet(): string;
+}
+
+export interface AuthStatus {
+  authenticated: boolean;
+  method: "oauth" | "api_key" | "none";
+  details?: string;
+}
+
+export interface AgentStatus {
+  name: string;
+  enabled: boolean;
+  installed: boolean;
+  version?: string;
+  auth: AuthStatus;
 }
 
 export interface AgentConfig {
@@ -26,6 +41,7 @@ export interface AgentConfig {
   auth?: {
     method: "oauth" | "api_key" | "none";
     instructions?: string;
+    auth_check_files?: string[];
   };
 
   dockerfile?: {

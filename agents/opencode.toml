@@ -58,6 +58,7 @@ domains = [
 [auth]
 method = "api_key"
 instructions = "Run 'opencode' and configure your preferred AI provider via settings. Supports Anthropic, OpenAI, Google, OpenRouter, Groq, and more."
+auth_check_files = ["config.toml", "config.json"]
 
 [dockerfile]
 snippet = """

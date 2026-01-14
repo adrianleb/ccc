@@ -1,22 +1,26 @@
 <p align="center">
-  <h1 align="center">CCC</h1>
-  <p align="center">
-    <strong>Coding Container CLI</strong><br>
-    Run AI coding agents in isolated Docker containers
-  </p>
+<pre>
+   ██████╗ ██████╗ ██████╗
+  ██╔════╝██╔════╝██╔════╝
+  ██║     ██║     ██║
+  ██║     ██║     ██║
+  ╚██████╗╚██████╗╚██████╗
+   ╚═════╝ ╚═════╝ ╚═════╝
+</pre>
+  <strong>Coding Container CLI</strong><br>
+  Run AI coding agents in isolated Docker containers
 </p>
 
 <p align="center">
   <a href="#installation">Installation</a> •
   <a href="#quick-start">Quick Start</a> •
   <a href="#features">Features</a> •
-  <a href="#documentation">Documentation</a> •
   <a href="#contributing">Contributing</a>
 </p>
 
 ---
 
-CCC makes it easy to run AI coding agents (Claude, Codex, Gemini) in secure, isolated Docker containers. Run locally or on a remote server, and connect from your laptop, phone, or Telegram.
+CCC makes it easy to run AI coding agents (Claude, Codex, Gemini, OpenCode) in secure, isolated Docker containers. Run locally or on a remote server, and connect from your laptop, phone, or Telegram.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -34,7 +38,7 @@ CCC makes it easy to run AI coding agents (Claude, Codex, Gemini) in secure, iso
 
 - **Network Isolation** — Firewall blocks all traffic except agent APIs
 - **Persistent Sessions** — Powered by [shpool](https://github.com/shell-pool/shpool), sessions survive disconnects
-- **Multi-Agent** — Claude, Codex, Gemini, or bring your own
+- **Multi-Agent** — Claude, Codex, Gemini, OpenCode, or bring your own
 - **Remote Hosting** — Deploy to any VPS, manage multiple hosts
 - **Mobile Access** — Connect via SSH + Tailscale using `ccc-server`
 - **Telegram Bot** — Chat with agents via [takopi](https://github.com/AbanteAI/takopi)
@@ -117,9 +121,10 @@ CCC uses [shpool](https://github.com/shell-pool/shpool) for persistent terminal 
 Select agents during `ccc init`:
 
 ```
-[1] claude  - Claude Code by Anthropic
-[2] codex   - Codex CLI by OpenAI
-[3] gemini  - Gemini CLI by Google
+[1] claude    - Claude Code by Anthropic
+[2] codex     - Codex CLI by OpenAI
+[3] gemini    - Gemini CLI by Google
+[4] opencode  - OpenCode (open source, multi-provider)
 [a] All
 ```
 
@@ -162,40 +167,106 @@ ccc @vps
 
 ## Mobile Access
 
+Connect to your coding agents from any device with SSH — phone, tablet, or laptop.
+
 ### ccc-server
 
-When you run `ccc init` on a remote host, CCC installs `ccc-server` — a lightweight wrapper that handles session attachment and firewall control. This lets you connect from any SSH client without needing CCC installed.
+When you run `ccc init` on a remote host, CCC installs `ccc-server` — a lightweight wrapper that handles session attachment and firewall control. Connect from any SSH client without needing CCC installed.
 
 ```bash
-# From any device with SSH
-ssh user@vps "~/bin/ccc-server"
-
-# With options
-ssh user@vps "~/bin/ccc-server --no-firewall"
-ssh user@vps "~/bin/ccc-server work"  # named session
+# On your VPS (via SSH)
+ccc-server              # Attach to main session
+ccc-server work         # Attach to named session
+ccc-server --no-firewall        # Disable firewall
+ccc-server --yolo "fix bugs"    # Auto-approve mode
 ```
 
-### Tailscale Setup
+**Detach:** `Ctrl+Space` then `Ctrl+Q`
 
-Generate an SSH config for easy access:
+### SSH Config
 
-```bash
-ccc setup-tailscale --ip 100.x.x.x --user ubuntu --host myvps
-```
+Add to `~/.ssh/config` for one-command access:
 
-Add to `~/.ssh/config` on any device:
-
-```
-Host myvps
-    HostName 100.x.x.x
+```ssh-config
+Host ccc
+    HostName your-vps-ip
     User ubuntu
     RemoteCommand ~/bin/ccc-server
     RequestTTY yes
 ```
 
-Then connect with: `ssh myvps`
+Then just: `ssh ccc`
 
-Works with iOS/Android SSH apps (Blink, Termius, Prompt).
+<details>
+<summary><strong>Multiple sessions</strong></summary>
+
+```ssh-config
+Host ccc
+    HostName your-vps-ip
+    User ubuntu
+    RemoteCommand ~/bin/ccc-server
+    RequestTTY yes
+
+Host ccc-work
+    HostName your-vps-ip
+    User ubuntu
+    RemoteCommand ~/bin/ccc-server work
+    RequestTTY yes
+
+Host ccc-yolo
+    HostName your-vps-ip
+    User ubuntu
+    RemoteCommand ~/bin/ccc-server --yolo
+    RequestTTY yes
+```
+
+</details>
+
+### Mobile Apps
+
+Any SSH app works. Set the "startup command" or "remote command" to `~/bin/ccc-server`.
+
+| App | Platform | Notes |
+|-----|----------|-------|
+| [Blink](https://blink.sh) | iOS | Best iOS terminal, Mosh support |
+| [Termius](https://termius.com) | iOS/Android | Cross-platform, free tier |
+| [Prompt](https://panic.com/prompt/) | iOS | Clean UI |
+
+### Optional: Tailscale
+
+[Tailscale](https://tailscale.com) gives your VPS a stable IP accessible from anywhere without port forwarding.
+
+<details>
+<summary><strong>Setup</strong></summary>
+
+```bash
+# On VPS
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up --ssh
+tailscale ip -4  # Get your 100.x.x.x IP
+```
+
+Install Tailscale on your devices and sign in with the same account.
+
+</details>
+
+### Optional: Mosh
+
+[Mosh](https://mosh.org) handles spotty WiFi/cellular better than SSH.
+
+<details>
+<summary><strong>Setup</strong></summary>
+
+```bash
+# On VPS
+sudo apt install mosh
+sudo ufw allow 60000:61000/udp
+
+# Connect
+mosh user@your-vps -- ~/bin/ccc-server
+```
+
+</details>
 
 ## Telegram Bot
 
@@ -213,7 +284,8 @@ ccc setup-takopi --token BOT_TOKEN --chat-id CHAT_ID
 └── agents/            # Agent definitions
     ├── claude.toml
     ├── codex.toml
-    └── gemini.toml
+    ├── gemini.toml
+    └── opencode.toml
 
 ~/.ccc/
 ├── Dockerfile
@@ -221,16 +293,6 @@ ccc setup-takopi --token BOT_TOKEN --chat-id CHAT_ID
 ├── ssh-keys/          # Add public key to GitHub
 └── projects/          # Mounted at /workspace
 ```
-
-## Documentation
-
-| Topic | Description |
-|-------|-------------|
-| [Installation](#installation) | Install CCC |
-| [Quick Start](#quick-start) | Get running in 60 seconds |
-| [Agents](#agents) | Configure coding agents |
-| [Remote Servers](#remote-servers) | Deploy to VPS |
-| [Mobile Access](#mobile-access) | Connect from phone |
 
 ## Contributing
 
@@ -242,27 +304,8 @@ bun run build
 ./dist/ccc --help
 ```
 
-### Project Structure
-
-```
-src/
-├── cli.ts           # Commands
-├── config.ts        # Config management
-├── agents/          # Agent loader & templates
-├── templates/       # Dockerfile, compose generators
-├── deploy/          # Local & remote deployment
-└── utils/           # Helpers
-```
-
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## License
 
 MIT © 2026
-
----
-
-<p align="center">
-  <a href="https://github.com/adrianleb/ccc/issues">Issues</a> •
-  <a href="https://github.com/adrianleb/ccc/discussions">Discussions</a>
-</p>

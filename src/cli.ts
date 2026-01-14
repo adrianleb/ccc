@@ -639,35 +639,5 @@ default_engine = "claude"`;
       ui.hint("Takopi will listen for Telegram messages and respond automatically");
     });
 
-  program
-    .command("setup-tailscale")
-    .description("Generate SSH config for multi-device access")
-    .option("--host <name>", "Host alias in SSH config", "ccc-vps")
-    .option("--ip <address>", "IP address or hostname (required)")
-    .option("--user <name>", "SSH user", "ubuntu")
-    .action((options) => {
-      console.log(`\n${ui.symbols.link} ${ui.style.bold("Multi-Device SSH Setup")}\n`);
-
-      if (!options.ip) {
-        ui.error("Please provide --ip <address>");
-        console.log(`\n  Example: ${ui.style.command("ccc setup-tailscale --ip 100.x.x.x")}`);
-        process.exit(1);
-      }
-
-      console.log(`  Add this to ${ui.style.path("~/.ssh/config")} on your devices:\n`);
-      console.log(`  ${ui.style.dim("─".repeat(50))}`);
-      console.log(`  ${ui.style.info(`Host ${options.host}`)}`);
-      console.log(`  ${ui.style.info(`    HostName ${options.ip}`)}`);
-      console.log(`  ${ui.style.info(`    User ${options.user}`)}`);
-      console.log(`  ${ui.style.info(`    RemoteCommand /home/${options.user}/bin/ccc-server`)}`);
-      console.log(`  ${ui.style.info(`    RequestTTY yes`)}`);
-      console.log(`  ${ui.style.dim("─".repeat(50))}`);
-
-      console.log(`\n  ${ui.style.dim("Then connect from any device:")}`);
-      ui.showCommand(`ssh ${options.host}`);
-
-      ui.hint("Works with any SSH client (laptop, phone, tablet)");
-    });
-
   return program;
 }

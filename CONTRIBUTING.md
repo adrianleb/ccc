@@ -5,7 +5,7 @@ Thanks for your interest in contributing!
 ## Development Setup
 
 ```bash
-git clone https://github.com/adrianleb/ccc.git
+git clone https://github.com/adrianleb/code-container.git
 cd ccc
 bun install
 ```

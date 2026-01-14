@@ -5,7 +5,7 @@
 set -e
 
 INSTALL_DIR="${HOME}/.local/bin"
-REPO_URL="https://github.com/adrianleb/ccc"
+REPO_URL="https://github.com/adrianleb/code-container"
 BINARY_NAME="ccc"
 
 # Colors

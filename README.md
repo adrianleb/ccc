@@ -36,14 +36,14 @@ Run AI coding agents locally or remotely in Docker containers with persistent se
 ## Installation
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/adrianleb/ccc/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/adrianleb/code-container/main/install.sh | sh
 ```
 
 <details>
 <summary>Build from source</summary>
 
 ```bash
-git clone https://github.com/adrianleb/ccc.git
+git clone https://github.com/adrianleb/code-container.git
 cd ccc
 bun install
 bun run build
@@ -287,7 +287,7 @@ ccc setup-takopi --token BOT_TOKEN --chat-id CHAT_ID
 ## Contributing
 
 ```bash
-git clone https://github.com/adrianleb/ccc.git
+git clone https://github.com/adrianleb/code-container.git
 cd ccc
 bun install
 bun run build

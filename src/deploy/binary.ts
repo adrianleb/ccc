@@ -5,7 +5,7 @@ import { execSync } from "child_process";
 import * as ui from "../utils/ui.ts";
 
 const BINARIES_DIR = join(homedir(), ".ccc", "binaries");
-const GITHUB_REPO = "adrianleb/ccc"; // TODO: Update with actual repo
+const GITHUB_REPO = "adrianleb/code-container"; // TODO: Update with actual repo
 
 export interface PlatformInfo {
   os: string; // "linux" | "darwin"
@@ -83,13 +83,13 @@ export async function downloadBinary(platform: PlatformInfo): Promise<string> {
     throw new Error(
       `Failed to download binary from ${releaseUrl}. ` +
         `Make sure the release exists and contains ${platform.binaryName}`,
-      { cause: error }
+      { cause: error },
     );
   }
 }
 
 export async function ensureBinaryForPlatform(
-  platform: PlatformInfo
+  platform: PlatformInfo,
 ): Promise<string> {
   // Check if already cached
   if (isBinaryCached(platform)) {

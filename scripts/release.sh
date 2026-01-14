@@ -204,12 +204,12 @@ Download the appropriate binary for your platform:
 
 \`\`\`bash
 # Example: Install on Linux x64
-curl -fsSL https://github.com/adrianleb/ccc/releases/download/v${VERSION}/ccc-linux-x64 -o ccc
+curl -fsSL https://github.com/adrianleb/code-container/releases/download/v${VERSION}/ccc-linux-x64 -o ccc
 chmod +x ccc
 sudo mv ccc /usr/local/bin/
 \`\`\`
 
-**Full Changelog**: https://github.com/adrianleb/ccc/compare/v${CURRENT_VERSION}...v${VERSION}"
+**Full Changelog**: https://github.com/adrianleb/code-container/compare/v${CURRENT_VERSION}...v${VERSION}"
 
 gh release create "v$VERSION" \
   --title "v$VERSION" \
@@ -222,4 +222,4 @@ gh release create "v$VERSION" \
 echo ""
 success "Released v$VERSION!"
 echo ""
-info "Release URL: https://github.com/adrianleb/ccc/releases/tag/v$VERSION"
+info "Release URL: https://github.com/adrianleb/code-container/releases/tag/v$VERSION"

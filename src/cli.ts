@@ -90,10 +90,44 @@ function getAgents(): Record<string, Agent> {
 }
 
 const DEFAULT_CONTAINER_NAME = "ccc";
+
+// Global target for @host prefix style commands
+let globalTarget: string | null = null;
+let globalTargetRaw: string | null = null; // Original @alias for display
+
+/**
+ * Extract @host prefix from argv before Commander parses.
+ * This enables consistent `ccc @host command` syntax across all commands.
+ */
+function extractGlobalTarget(): void {
+  const firstArg = process.argv[2];
+  if (firstArg?.startsWith("@")) {
+    globalTargetRaw = firstArg;
+    globalTarget = resolveTarget(firstArg);
+    process.argv.splice(2, 1); // Remove from argv so Commander doesn't see it
+  } else if (firstArg === "local") {
+    globalTargetRaw = "local";
+    globalTarget = null;
+    process.argv.splice(2, 1);
+  }
+}
+
+/** Get the resolved host from @host prefix, or null for local */
+function getGlobalTarget(): string | null {
+  return globalTarget;
+}
+
+/** Get the raw @alias string for display purposes */
+function getGlobalTargetRaw(): string | null {
+  return globalTargetRaw;
+}
 const DEFAULT_OUTPUT_DIR = join(homedir(), ".ccc");
 const CLI_VERSION = (pkg as { version?: string }).version ?? "0.0.0";
 
 export function createCLI(): Command {
+  // Extract @host prefix before Commander parses
+  extractGlobalTarget();
+
   const program = new Command();
 
   program
@@ -106,14 +140,13 @@ export function createCLI(): Command {
     });
 
   program
-    .argument("[target]", "Remote target (@alias) or session name")
     .argument("[session]", "Session name (default: main)")
     .option("-a, --agent <name>", "Agent to use (default: from config or first available)")
     .option("-w, --workspace <dir>", "Project directory to mount")
     .option("--no-firewall", "Disable firewall for this session")
     .option("--yolo [prompt]", "Enable auto-permissions mode (optional prompt)")
     .option("-s, --session <name>", "Shpool session name", "main")
-    .action(async (target, session, options) => {
+    .action(async (session, options) => {
       const agents = getAgents();
       let agentName = options.agent || getDefaultAgent();
       if (!agentName && Object.keys(agents).length > 0) {
@@ -124,21 +157,19 @@ export function createCLI(): Command {
       const yoloPrompt = typeof options.yolo === "string" ? options.yolo : undefined;
       const yoloEnabled = Boolean(options.yolo);
 
-      if (target?.startsWith("@")) {
-        const host = resolveTarget(target);
-        if (host) {
-          const sessionName = session || options.session || "main";
-          attachRemote(host, sessionName, {
-            noFirewall: !options.firewall,
-            yolo: yoloEnabled,
-            prompt: yoloPrompt,
-            agent,
-          });
-          return;
-        }
+      const host = getGlobalTarget();
+      if (host) {
+        const sessionName = session || options.session || "main";
+        attachRemote(host, sessionName, {
+          noFirewall: !options.firewall,
+          yolo: yoloEnabled,
+          prompt: yoloPrompt,
+          agent,
+        });
+        return;
       }
 
-      const sessionName = session || target || options.session || "main";
+      const sessionName = session || options.session || "main";
 
       if (["ls", "logs", "kill", "restart", "build", "update", "start"].includes(sessionName)) {
         return;
@@ -155,13 +186,13 @@ export function createCLI(): Command {
     });
 
   program
-    .command("init [target]")
+    .command("init")
     .description("Initialize a new coding container")
     .option("--agents <names>", "Agent(s) to use (comma-separated, e.g., claude,codex)")
     .option("--no-build", "Skip building the container")
     .option("--no-cache", "Build without Docker cache")
-    .action(async (target, options) => {
-      const host = resolveTarget(target);
+    .action(async (options) => {
+      const host = getGlobalTarget();
 
       let agents = getAgents();
 
@@ -354,7 +385,7 @@ export function createCLI(): Command {
         await buildContainer(outputDir, { noCache: !options.cache });
 
         console.log(`\n  ${ui.symbols.rocket} Starting container...`);
-        await startContainer(outputDir);
+        await startContainer(outputDir, true);  // force recreate if container exists
         ui.item("Container started", "ok");
       } else {
         console.log(`\n  ${ui.style.dim("Files created. To build and start the container:")}`);
@@ -379,11 +410,11 @@ export function createCLI(): Command {
     });
 
   program
-    .command("build [target]")
+    .command("build")
     .description("Build/rebuild the container")
     .option("--no-cache", "Build without Docker cache")
-    .action(async (target, options) => {
-      const host = resolveTarget(target);
+    .action(async (options) => {
+      const host = getGlobalTarget();
 
       if (!host) {
         requireDocker();
@@ -419,16 +450,16 @@ export function createCLI(): Command {
     });
 
   program
-    .command("start [target]")
+    .command("start")
     .description("Start the container")
-    .action(async (target, options) => {
-      const host = resolveTarget(target);
+    .action(async () => {
+      const host = getGlobalTarget();
 
       if (host) {
         console.log(`\n${ui.symbols.rocket} ${ui.style.bold("Starting container on")} ${ui.style.highlight(host)}...\n`);
         try {
           await startRemote(host);
-          ui.hint(`Connect with: ${ui.style.command(`ccc ${target}`)}`);
+          ui.hint(`Connect with: ${ui.style.command(`ccc ${getGlobalTargetRaw()}`)}`);
         } catch {
           process.exit(1);
         }
@@ -442,17 +473,17 @@ export function createCLI(): Command {
     });
 
   program
-    .command("ls [target]")
-    .description("List all hosts and sessions (or sessions for a specific target)")
-    .action((target) => {
-      // If specific target provided, just show that one
-      if (target) {
-        const host = resolveTarget(target);
-        if (host) {
-          console.log(`\n${ui.symbols.terminal} ${ui.style.bold("Active sessions on")} ${ui.style.highlight(host)}:\n`);
-          listRemoteSessions(host);
-          return;
-        }
+    .command("ls")
+    .description("List all hosts and sessions (or sessions for a specific target with @host prefix)")
+    .action(() => {
+      const host = getGlobalTarget();
+      // If specific target provided via @host prefix, just show that one
+      if (host) {
+        console.log(`\n${ui.symbols.terminal} ${ui.style.bold("Active sessions on")} ${ui.style.highlight(host)}:\n`);
+        listRemoteSessions(host);
+        return;
+      }
+      if (getGlobalTargetRaw() === "local") {
         console.log(`\n${ui.symbols.terminal} ${ui.style.bold("Active sessions (local):")}\n`);
         listSessions(DEFAULT_CONTAINER_NAME);
         return;
@@ -655,10 +686,10 @@ export function createCLI(): Command {
     });
 
   program
-    .command("kill <session> [target]")
+    .command("kill <session>")
     .description("Kill a session")
-    .action((session, target) => {
-      const host = resolveTarget(target);
+    .action((session) => {
+      const host = getGlobalTarget();
 
       if (host) {
         killRemoteSession(host, session);
@@ -670,10 +701,10 @@ export function createCLI(): Command {
     });
 
   program
-    .command("logs [target]")
+    .command("logs")
     .description("Show container logs")
-    .action((target) => {
-      const host = resolveTarget(target);
+    .action(() => {
+      const host = getGlobalTarget();
 
       if (host) {
         console.log(`\n${ui.symbols.file} ${ui.style.bold("Container logs from")} ${ui.style.highlight(host)}:\n`);
@@ -686,10 +717,10 @@ export function createCLI(): Command {
     });
 
   program
-    .command("restart [target]")
+    .command("restart")
     .description("Restart the container")
-    .action((target) => {
-      const host = resolveTarget(target);
+    .action(() => {
+      const host = getGlobalTarget();
 
       if (host) {
         console.log(`\n${ui.symbols.gear} ${ui.style.bold("Restarting container on")} ${ui.style.highlight(host)}...`);
@@ -703,12 +734,12 @@ export function createCLI(): Command {
     });
 
   program
-    .command("update [target]")
+    .command("update")
     .description("Update agents in the container to latest versions")
     .option("-a, --agent <name>", "Specific agent to update (default: all)")
     .option("--binary", "Update the ccc binary on remote host")
-    .action(async (target, options) => {
-      const host = resolveTarget(target);
+    .action(async (options) => {
+      const host = getGlobalTarget();
       const containerName = DEFAULT_CONTAINER_NAME;
       const { execSync } = await import("child_process");
       const agents = getAgents();
@@ -717,7 +748,7 @@ export function createCLI(): Command {
       if (options.binary) {
         if (!host) {
           ui.error("--binary flag is only for remote targets");
-          console.log(`\n  Usage: ${ui.style.command("ccc update @remote --binary")}`);
+          console.log(`\n  Usage: ${ui.style.command("ccc @remote update --binary")}`);
           process.exit(1);
         }
         console.log(`\n${ui.symbols.package} ${ui.style.bold("Updating ccc binary on")} ${ui.style.highlight(host)}...\n`);
@@ -840,9 +871,8 @@ export function createCLI(): Command {
     .command("list")
     .alias("ls")
     .description("List available and installed agents with auth status")
-    .argument("[target]", "Remote target (@alias) or local")
-    .action(async (target) => {
-      const host = resolveTarget(target);
+    .action(async () => {
+      const host = getGlobalTarget();
       const templates = listAvailableAgents();
       const enabledAgents = getAgents();
 
@@ -964,11 +994,10 @@ export function createCLI(): Command {
   agentCmd
     .command("add <name>")
     .description("Add an agent (enables config, rebuilds container, runs auth)")
-    .argument("[target]", "Remote target (@alias) or local")
     .option("--no-build", "Only enable config, skip rebuild (for adding multiple agents)")
     .option("--no-cache", "Build without Docker cache")
-    .action(async (name, target, options) => {
-      const host = resolveTarget(target);
+    .action(async (name, options) => {
+      const host = getGlobalTarget();
       const templates = listAvailableAgents();
       const template = templates.find((t) => t.name === name);
 
@@ -1082,9 +1111,8 @@ export function createCLI(): Command {
     .command("rm <name>")
     .alias("remove")
     .description("Remove an agent")
-    .argument("[target]", "Remote target (@alias) or local")
-    .action(async (name, target) => {
-      const host = resolveTarget(target);
+    .action(async (name) => {
+      const host = getGlobalTarget();
 
       if (!isAgentEnabled(name)) {
         ui.error(`Agent '${name}' is not enabled`);
@@ -1112,9 +1140,8 @@ export function createCLI(): Command {
   agentCmd
     .command("auth <name>")
     .description("Authenticate an agent")
-    .argument("[target]", "Remote target (@alias) or local")
-    .action(async (name, target) => {
-      const host = resolveTarget(target);
+    .action(async (name) => {
+      const host = getGlobalTarget();
       const agents = getAgents();
       const agent = agents[name];
 
@@ -1215,6 +1242,15 @@ export function createCLI(): Command {
     .alias("ls")
     .description("List all firewall domains by source")
     .action(() => {
+      const host = getGlobalTarget();
+
+      // For remote targets, run the command via SSH
+      if (host) {
+        console.log(`\n${ui.symbols.shield} ${ui.style.bold("Firewall Domains on")} ${ui.style.highlight(host)}\n`);
+        sshExec(host, "ccc firewall ls", { stdio: "inherit" });
+        return;
+      }
+
       const agents = getAgents();
       const extensions = loadExtensions();
       const userDomains = getUserFirewallDomains();
@@ -1284,6 +1320,13 @@ export function createCLI(): Command {
     .command("add <domain>")
     .description("Add a custom firewall domain")
     .action((domain) => {
+      const host = getGlobalTarget();
+
+      if (host) {
+        sshExec(host, `ccc firewall add ${domain}`, { stdio: "inherit" });
+        return;
+      }
+
       if (addUserFirewallDomain(domain)) {
         ui.success(`Added domain: ${ui.style.highlight(domain)}`);
         ui.hint("Rebuild container to apply: " + ui.style.command("ccc build"));
@@ -1297,6 +1340,13 @@ export function createCLI(): Command {
     .alias("remove")
     .description("Remove a custom firewall domain")
     .action((domain) => {
+      const host = getGlobalTarget();
+
+      if (host) {
+        sshExec(host, `ccc firewall rm ${domain}`, { stdio: "inherit" });
+        return;
+      }
+
       if (removeUserFirewallDomain(domain)) {
         ui.success(`Removed domain: ${domain}`);
         ui.hint("Rebuild container to apply: " + ui.style.command("ccc build"));
@@ -1314,6 +1364,14 @@ export function createCLI(): Command {
     .alias("ls")
     .description("List available and enabled extensions")
     .action(() => {
+      const host = getGlobalTarget();
+
+      if (host) {
+        console.log(`\n${ui.symbols.gear} ${ui.style.bold("Extensions on")} ${ui.style.highlight(host)}\n`);
+        sshExec(host, "ccc extension ls", { stdio: "inherit" });
+        return;
+      }
+
       const templates = listAvailableExtensions();
       const enabled = loadExtensions();
 
@@ -1364,6 +1422,13 @@ export function createCLI(): Command {
     .command("add <name>")
     .description("Enable an extension")
     .action((name) => {
+      const host = getGlobalTarget();
+
+      if (host) {
+        sshExec(host, `ccc extension add ${name}`, { stdio: "inherit" });
+        return;
+      }
+
       const templates = listAvailableExtensions();
       const template = templates.find((t) => t.name === name);
 
@@ -1406,7 +1471,11 @@ export function createCLI(): Command {
             break;
 
           case "host":
-            ui.hint("Start with: " + ui.style.command(`ccc extension start ${name}`));
+            if (name === "takopi") {
+              ui.hint("Configure and start: " + ui.style.command("ccc setup-takopi"));
+            } else {
+              ui.hint("Start with: " + ui.style.command(`ccc extension start ${name}`));
+            }
             break;
         }
 
@@ -1419,6 +1488,13 @@ export function createCLI(): Command {
     .alias("remove")
     .description("Disable an extension")
     .action((name) => {
+      const host = getGlobalTarget();
+
+      if (host) {
+        sshExec(host, `ccc extension rm ${name}`, { stdio: "inherit" });
+        return;
+      }
+
       if (!isExtensionEnabled(name)) {
         ui.error(`Extension '${name}' is not enabled`);
         process.exit(1);
@@ -1460,6 +1536,13 @@ export function createCLI(): Command {
     .command("start <name>")
     .description("Start a host extension")
     .action((name) => {
+      const host = getGlobalTarget();
+
+      if (host) {
+        sshExec(host, `ccc extension start ${name}`, { stdio: "inherit" });
+        return;
+      }
+
       const ext = loadExtensions()[name];
       if (!ext) {
         ui.error(`Extension '${name}' not found or not enabled`);
@@ -1485,8 +1568,17 @@ export function createCLI(): Command {
       }
 
       // Start
-      if (startHostExtension(ext)) {
+      const result = startHostExtension(ext);
+      if (result === true) {
         ui.success(`${name} started!`);
+      } else if (result === null) {
+        // Process died immediately - likely needs configuration
+        ui.error(`${name} crashed immediately (missing configuration?)`);
+        if (name === "takopi") {
+          ui.hint(`Configure takopi first: ${ui.style.command("ccc setup-takopi")}`);
+        } else {
+          ui.hint("Check that the extension is properly configured");
+        }
       } else {
         ui.error(`Failed to start ${name}`);
       }
@@ -1496,6 +1588,13 @@ export function createCLI(): Command {
     .command("stop <name>")
     .description("Stop a host extension")
     .action((name) => {
+      const host = getGlobalTarget();
+
+      if (host) {
+        sshExec(host, `ccc extension stop ${name}`, { stdio: "inherit" });
+        return;
+      }
+
       const ext = loadExtensions()[name];
       if (!ext) {
         ui.error(`Extension '${name}' not found or not enabled`);
@@ -1548,19 +1647,17 @@ export function createCLI(): Command {
   program
     .command("setup-takopi")
     .description("Install and configure Telegram bot for takopi notifications")
-    .argument("[target]", "Remote target (@alias) or local")
     .option("--token <token>", "Telegram bot token")
     .option("--chat-id <id>", "Telegram chat ID")
-    .action(async (target, options) => {
+    .action(async (options) => {
       console.log(`\n${ui.symbols.sparkles} ${ui.style.bold("Takopi Setup")}\n`);
 
-      const isRemote = target?.startsWith("@");
-      const host = isRemote ? resolveTarget(target) : null;
+      const host = getGlobalTarget();
       const containerName = DEFAULT_CONTAINER_NAME;
 
       const { execSync } = await import("child_process");
       try {
-        if (isRemote && host) {
+        if (host) {
           execSync(`ssh ${host} "docker inspect ${containerName}" >/dev/null 2>&1`);
         } else {
           execSync(`docker inspect ${containerName} >/dev/null 2>&1`);
@@ -1572,8 +1669,8 @@ export function createCLI(): Command {
 
       ui.header(ui.step(1, 4, "Installing takopi"));
       try {
-        const installCmd = `docker exec ${containerName} uv tool install takopi`;
-        if (isRemote && host) {
+        const installCmd = `docker exec ${containerName} uv tool install takopi --python 3.14`;
+        if (host) {
           execSync(`ssh ${host} "${installCmd}"`, { stdio: "inherit" });
         } else {
           execSync(installCmd, { stdio: "inherit" });
@@ -1591,8 +1688,9 @@ export function createCLI(): Command {
         console.log(`  ${ui.style.dim("2.")} Get your chat ID from ${ui.style.command("@userinfobot")}\n`);
 
         if (!options.token) {
+          const targetPrefix = getGlobalTargetRaw() ? `${getGlobalTargetRaw()} ` : "";
           console.log(`  ${ui.style.dim("Then run:")}`);
-          ui.showCommand(`ccc setup-takopi${target ? " " + target : ""} --token YOUR_TOKEN --chat-id YOUR_CHAT_ID`);
+          ui.showCommand(`ccc ${targetPrefix}setup-takopi --token YOUR_TOKEN --chat-id YOUR_CHAT_ID`);
           return;
         }
       }
@@ -1607,7 +1705,7 @@ default_engine = "claude"`;
       const configCmd = `docker exec ${containerName} sh -c "mkdir -p /home/ccc/.takopi && printf %s '${configB64}' | base64 -d > /home/ccc/.takopi/takopi.toml"`;
 
       try {
-        if (isRemote && host) {
+        if (host) {
           sshExec(host, configCmd, { stdio: "pipe" });
         } else {
           execSync(configCmd, { stdio: "pipe" });
@@ -1624,7 +1722,7 @@ default_engine = "claude"`;
       const startCmd = `docker exec -d ${containerName} takopi`;
 
       try {
-        if (isRemote && host) {
+        if (host) {
           execSync(`ssh ${host} "${killCmd}"`, { stdio: "pipe" });
           execSync(`ssh ${host} "${startCmd}"`, { stdio: "pipe" });
         } else {

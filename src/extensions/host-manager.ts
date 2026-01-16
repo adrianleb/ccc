@@ -26,8 +26,9 @@ export function installHostExtension(extension: Extension, options: { host?: str
 
 /**
  * Start a host extension daemon inside the container
+ * Returns: true if started successfully, false if failed, null if needs configuration
  */
-export function startHostExtension(extension: Extension, options: { host?: string } = {}): boolean {
+export function startHostExtension(extension: Extension, options: { host?: string } = {}): boolean | null {
   if (extension.type !== "host" || !extension.runCmd) {
     return false;
   }
@@ -42,6 +43,17 @@ export function startHostExtension(extension: Extension, options: { host?: strin
     } else {
       execSync(cmd, { stdio: "pipe" });
     }
+
+    // Wait briefly and check if process is still running
+    // (catches immediate crashes due to missing config)
+    const sleep = (ms: number) => execSync(`sleep ${ms / 1000}`, { stdio: "pipe" });
+    sleep(500);
+
+    if (!isHostExtensionRunning(extension, options)) {
+      // Process died - likely missing configuration
+      return null;
+    }
+
     return true;
   } catch {
     return false;

@@ -180,7 +180,7 @@ export function attachSession(
   args.push(containerName);
 
   // Setup XDG_RUNTIME_DIR for shpool (docker exec bypasses entrypoint)
-  const xdgSetup = 'sudo mkdir -p /run/user/$(id -u) && sudo chown $(id -u):$(id -g) /run/user/$(id -u)';
+  const xdgSetup = 'export XDG_RUNTIME_DIR=/run/user/$(id -u) && sudo mkdir -p $XDG_RUNTIME_DIR && sudo chown $(id -u):$(id -g) $XDG_RUNTIME_DIR && sudo chmod 700 $XDG_RUNTIME_DIR';
 
   if (options.yolo && options.prompt && options.agent) {
     const agentArgs = [options.agent.runCmd];
